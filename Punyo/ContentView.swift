@@ -6,19 +6,24 @@ struct ContentView: View {
     @State private var settings = PunyoRenderSettings()
     @State private var panelExpanded = false
     @State private var haptics = PunyoHapticEngine()
+    @State private var speaker = PunyoSpeaker()
 
     var body: some View {
         GeometryReader { geo in
             ZStack(alignment: .bottom) {
                 TimelineView(.animation) { context in
                     let t = context.date.timeIntervalSinceReferenceDate
-                    let _ = stepPhysics(time: t)
-                    PunyoShaderView(
-                        physics: physics,
-                        params: params,
-                        settings: settings
-                    ) {
-                        background
+                    let _ = step(time: t)
+                    ZStack {
+                        PunyoShaderView(
+                            physics: physics,
+                            params: params,
+                            settings: settings
+                        ) {
+                            background
+                        }
+                        PunyoSpeechView(speaker: speaker,
+                                        anchor: speechAnchor(in: geo.size))
                     }
                 }
 
@@ -95,13 +100,25 @@ struct ContentView: View {
             }
     }
 
-    private func stepPhysics(time: TimeInterval) {
+    // Where the line sits: above the puni, kept clear of the screen edges so a
+    // catch in a corner is still readable.
+    private func speechAnchor(in size: CGSize) -> CGPoint {
+        let margin: CGFloat = 90
+        return CGPoint(
+            x: min(max(physics.center.x, margin), max(margin, size.width - margin)),
+            y: max(60, physics.center.y - physics.radius - 40)
+        )
+    }
+
+    private func step(time: TimeInterval) {
         physics.step(time: time, params: params)
+        speaker.step(time: time)
 
         // Consumed outside the touch check so a capture that lands on the same
         // frame as the release still fires, and never leaks into the next touch.
-        if physics.consumeCapturePop() {
+        if let capture = physics.consumeCapture() {
             haptics.capturePop()
+            speaker.speak(for: capture, at: time)
         }
 
         guard physics.isFingerDown else { return }

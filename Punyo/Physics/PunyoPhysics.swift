@@ -34,7 +34,10 @@ final class PunyoPhysics {
 
     private var captureContact: TimeInterval = 0
     private var dazedTimer: TimeInterval = 0
-    private var pendingCapturePop = false
+    private var pendingCapture: PunyoCaptureEvent?
+    private var touchStartTime: TimeInterval?
+    private var captureCount: Int = 0
+    private var lastCaptureTime: TimeInterval?
 
     private var lastStepTime: TimeInterval?
 
@@ -84,6 +87,9 @@ final class PunyoPhysics {
         lastFingerPosition = point
         lastFingerTime = time
         fingerVelocity = .zero
+        // A chase is one touch: catching it requires lifting off, so the length
+        // of this touch is exactly how long the catch took.
+        touchStartTime = time
     }
 
     func updateTouch(to point: CGPoint, time: TimeInterval) {
@@ -102,11 +108,11 @@ final class PunyoPhysics {
         fingerVelocity = .zero
     }
 
-    // One-shot flag for the moment of capture, consumed by the haptics driver.
-    func consumeCapturePop() -> Bool {
-        guard pendingCapturePop else { return false }
-        pendingCapturePop = false
-        return true
+    // One-shot event for the moment of capture, consumed by whatever reacts to
+    // it (haptics, speech).
+    func consumeCapture() -> PunyoCaptureEvent? {
+        defer { pendingCapture = nil }
+        return pendingCapture
     }
 
     // MARK: - Simulation
@@ -129,7 +135,7 @@ final class PunyoPhysics {
                                 dy: fingerPosition.y - center.y)
         let fingerDist = hypot(toFinger.dx, toFinger.dy)
 
-        updateCapture(fingerDist: fingerDist, dt: elapsed)
+        updateCapture(fingerDist: fingerDist, time: time, dt: elapsed)
 
         // Threat falls off to nothing at fleeRadius. A captured or freshly
         // released puni has no threat: caught means caught, and the beat after
@@ -190,7 +196,7 @@ final class PunyoPhysics {
 
     // MARK: - Pieces
 
-    private func updateCapture(fingerDist: CGFloat, dt: TimeInterval) {
+    private func updateCapture(fingerDist: CGFloat, time: TimeInterval, dt: TimeInterval) {
         if dazedTimer > 0 {
             dazedTimer = max(0, dazedTimer - dt)
         }
@@ -215,8 +221,15 @@ final class PunyoPhysics {
             captureContact += dt
             if captureContact >= captureHold {
                 isCaptured = true
-                pendingCapturePop = true
                 captureContact = 0
+                captureCount += 1
+                pendingCapture = PunyoCaptureEvent(
+                    stamina: stamina,
+                    chaseDuration: touchStartTime.map { time - $0 } ?? 0,
+                    captureCount: captureCount,
+                    timeSinceLastCapture: lastCaptureTime.map { time - $0 }
+                )
+                lastCaptureTime = time
             }
         } else {
             captureContact = 0
