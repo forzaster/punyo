@@ -106,6 +106,79 @@ static inline float punyoCoverage(float sd) {
     return half4(outCol, max(currentColor.a, half(coverage)));
 }
 
+// --- Technique 3: SDF + SSS + screen-space refraction ----------------------
+// Samples the layer beneath (background pattern) offset along -normal.xy so
+// what's behind the puni bends around as if seen through a glassy blob. Uses
+// .layerEffect (SwiftUI::Layer), so the maxSampleOffset in Swift must cover
+// the largest offset used here.
+
+[[ stitchable ]] half4 punyo_sdfSSSRefract(
+    float2 position,
+    SwiftUI::Layer layer,
+    float4 boundingRect,
+    float time,
+    float2 fingerPos,
+    float fingerActive,
+    float2 center,
+    float2 deformation,
+    float radius,
+    float viscosity,
+    float elasticity
+) {
+    float sd = sdPunyoSilhouette(position, center, radius, deformation);
+    float coverage = punyoCoverage(sd);
+    if (coverage < 0.001) {
+        return layer.sample(position);
+    }
+
+    float3 n = punyoNormal(position, center, radius, deformation);
+    float inside = max(0.0, -sd);
+    float thickness = clamp(inside / max(radius, 0.001), 0.0, 1.0);
+
+    // Screen-space refraction: shift sample along -normal.xy, scale by
+    // thickness so the effect vanishes at the rim.
+    const float refractPixels = 42.0;
+    float2 refractOffset = -n.xy * (refractPixels * thickness);
+    float2 samplePos = clamp(position + refractOffset,
+                             float2(0.0, 0.0),
+                             boundingRect.zw);
+    half4 refracted = layer.sample(samplePos);
+
+    // Surface shading identical in structure to punyo_sdfSSS.
+    float3 L = normalize(float3(-0.4, -0.55, 0.75));
+    float3 V = float3(0.0, 0.0, 1.0);
+    float3 H = normalize(L + V);
+    const float wrap = 0.3;
+    float diff = max(0.0, (dot(n, L) + wrap) / (1.0 + wrap));
+    float spec = pow(max(0.0, dot(n, H)), 44.0);
+    float backFacing = max(0.0, dot(-n, L));
+    float transmission = pow(1.0 - thickness, 2.5);
+    float sssGlow = backFacing * transmission;
+
+    float3 base  = float3(0.86, 0.44, 0.78);
+    float3 inner = float3(1.00, 0.55, 0.65);
+    float3 surface = base * (0.30 + 0.70 * diff) + inner * sssGlow * 1.4;
+
+    // Fresnel: rim reflects/refracts stronger; core is more transparent.
+    float fresnel = pow(1.0 - max(0.0, n.z), 3.0);
+    float transparency = mix(0.55, 0.05, fresnel);
+
+    // Slight warm tint applied to what passes through.
+    half3 tint = half3(1.05, 0.85, 0.95);
+    half3 seen = half3(refracted.rgb) * tint;
+    half3 col  = mix(half3(surface), seen, half(transparency));
+    col += half3(1.0, 0.9, 0.95) * half(spec) * half(0.55);
+    col += half3(1.0, 0.75, 0.90) * half(fresnel * 0.25);
+
+    // Contact shadow just outside the silhouette (uses raw layer sample).
+    float shadow = smoothstep(radius * 0.55, 0.0, sd) * (1.0 - coverage);
+    half4 layerAt = layer.sample(position);
+    half3 bg = layerAt.rgb * half(1.0 - shadow * 0.35);
+
+    half3 outCol = mix(bg, col, half(coverage));
+    return half4(outCol, 1.0);
+}
+
 // --- Technique 2: SDF + pseudo SSS -----------------------------------------
 // Adds a translucent core: light enters from the back, scatters through the
 // dome, and re-emerges toward the camera. Approximated with:

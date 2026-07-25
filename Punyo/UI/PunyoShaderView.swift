@@ -1,8 +1,9 @@
 import SwiftUI
 
-// Full-screen surface that runs the currently selected puni shader as a
-// colorEffect on the given background content. All techniques share the same
-// argument list — swap the shader function name to swap the visual.
+// Full-screen surface that runs the currently selected puni shader on the
+// given background content. Techniques that need the background (refraction)
+// use .layerEffect; opaque techniques use .colorEffect. Swap the shader
+// function name to swap the visual.
 struct PunyoShaderView<Background: View>: View {
     let physics: PunyoPhysics
     let params: PunyoParameters
@@ -12,8 +13,13 @@ struct PunyoShaderView<Background: View>: View {
     var body: some View {
         TimelineView(.animation) { context in
             let t = context.date.timeIntervalSinceReferenceDate
-            background()
-                .colorEffect(makeShader(time: t))
+            let shader = makeShader(time: t)
+            switch settings.technique.effectKind {
+            case .colorEffect:
+                background().colorEffect(shader)
+            case .layerEffect(let offset):
+                background().layerEffect(shader, maxSampleOffset: offset)
+            }
         }
     }
 

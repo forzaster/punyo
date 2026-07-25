@@ -41,11 +41,35 @@ struct ContentView: View {
     }
 
     private var background: some View {
-        LinearGradient(
-            colors: [Color(red: 0.05, green: 0.05, blue: 0.09),
-                     Color(red: 0.10, green: 0.05, blue: 0.15)],
-            startPoint: .top, endPoint: .bottom
-        )
+        ZStack {
+            LinearGradient(
+                colors: [Color(red: 0.06, green: 0.07, blue: 0.12),
+                         Color(red: 0.14, green: 0.06, blue: 0.18)],
+                startPoint: .top, endPoint: .bottom
+            )
+            // Subtle grid so screen-space refraction is visible when the
+            // puni is a translucent lens over the background.
+            Canvas { ctx, size in
+                let spacing: CGFloat = 42
+                let lineColor = Color.white.opacity(0.05)
+                var x: CGFloat = 0
+                while x <= size.width {
+                    var path = Path()
+                    path.move(to: CGPoint(x: x, y: 0))
+                    path.addLine(to: CGPoint(x: x, y: size.height))
+                    ctx.stroke(path, with: .color(lineColor), lineWidth: 1)
+                    x += spacing
+                }
+                var y: CGFloat = 0
+                while y <= size.height {
+                    var path = Path()
+                    path.move(to: CGPoint(x: 0, y: y))
+                    path.addLine(to: CGPoint(x: size.width, y: y))
+                    ctx.stroke(path, with: .color(lineColor), lineWidth: 1)
+                    y += spacing
+                }
+            }
+        }
     }
 
     private var dragGesture: some Gesture {
