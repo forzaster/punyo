@@ -2,6 +2,7 @@ import SwiftUI
 
 struct DebugSliderPanel: View {
     @Bindable var params: PunyoParameters
+    @Bindable var settings: PunyoRenderSettings
     @Binding var isExpanded: Bool
 
     var body: some View {
@@ -44,6 +45,8 @@ struct DebugSliderPanel: View {
 
     private var content: some View {
         VStack(spacing: 10) {
+            techniquePicker
+            Divider().opacity(0.4)
             slider("粘度",     value: $params.viscosity,   range: PunyoParameters.viscosityRange,   fmt: "%.2f")
             slider("弾性",     value: $params.elasticity,  range: PunyoParameters.elasticityRange,  fmt: "%.0f")
             slider("減衰",     value: $params.damping,     range: PunyoParameters.dampingRange,     fmt: "%.1f")
@@ -52,6 +55,20 @@ struct DebugSliderPanel: View {
         }
         .padding(.horizontal, 16)
         .padding(.bottom, 14)
+    }
+
+    private var techniquePicker: some View {
+        HStack(spacing: 10) {
+            Text("技法")
+                .font(.caption.weight(.medium))
+                .frame(width: 64, alignment: .leading)
+            Picker("", selection: $settings.technique) {
+                ForEach(PunyoTechnique.allCases) { tech in
+                    Text(tech.rawValue).tag(tech)
+                }
+            }
+            .pickerStyle(.segmented)
+        }
     }
 
     private func slider(

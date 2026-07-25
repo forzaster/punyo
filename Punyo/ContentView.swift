@@ -3,20 +3,29 @@ import SwiftUI
 struct ContentView: View {
     @State private var params = PunyoParameters()
     @State private var physics = PunyoPhysics()
+    @State private var settings = PunyoRenderSettings()
     @State private var panelExpanded = false
 
     var body: some View {
         GeometryReader { geo in
             ZStack(alignment: .bottom) {
-                background
-
                 TimelineView(.animation) { context in
                     let t = context.date.timeIntervalSinceReferenceDate
                     let _ = stepPhysics(time: t)
-                    PunyoView(physics: physics)
+                    PunyoShaderView(
+                        physics: physics,
+                        params: params,
+                        settings: settings
+                    ) {
+                        background
+                    }
                 }
 
-                DebugSliderPanel(params: params, isExpanded: $panelExpanded)
+                DebugSliderPanel(
+                    params: params,
+                    settings: settings,
+                    isExpanded: $panelExpanded
+                )
             }
             .contentShape(Rectangle())
             .gesture(dragGesture)
@@ -37,7 +46,6 @@ struct ContentView: View {
                      Color(red: 0.10, green: 0.05, blue: 0.15)],
             startPoint: .top, endPoint: .bottom
         )
-        .ignoresSafeArea()
     }
 
     private var dragGesture: some Gesture {
