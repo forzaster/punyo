@@ -21,6 +21,14 @@ final class PunyoPhysics {
 
     let radius: CGFloat = 90
 
+    // Normalized 0..1 measure of how much the puni is currently deformed.
+    // Used to drive continuous haptics intensity.
+    var deformationLevel: Double {
+        let mag = hypot(deformation.dx, deformation.dy)
+        let scale = radius * 0.6
+        return min(1.0, mag / scale)
+    }
+
     func setRest(_ point: CGPoint) {
         restCenter = point
         if center == .zero {
@@ -63,14 +71,24 @@ final class PunyoPhysics {
         let viscosity = params.viscosity
         let overshoot = params.overshoot
 
-        // --- Body translation: spring-damper toward restCenter ---
-        let toRest = CGVector(dx: restCenter.x - center.x, dy: restCenter.y - center.y)
-        // A lower elasticity for body translation than deformation gives a wobbly settle.
-        let bodyK = elasticity * 0.15
+        // --- Body translation: spring-damper toward a target ---
+        // While pressed, the target is the finger position (body gets dragged
+        // along with the touch). On release, the target snaps back to restCenter
+        // and the residual velocity produces a visible overshoot before settling.
+        let bodyTarget: CGPoint = isFingerDown ? fingerPosition : restCenter
+        let toTarget = CGVector(dx: bodyTarget.x - center.x,
+                                dy: bodyTarget.y - center.y)
+        // Follow-mode uses a stronger spring so the ball actually keeps up with
+        // the finger; viscosity slows the follow (heavier feel). Settle-mode uses
+        // a softer spring so the return wobbles.
+        let followScale = 1.0 - Double(viscosity) * 0.75
+        let bodyK = isFingerDown
+            ? elasticity * 0.55 * followScale
+            : elasticity * 0.15
         // Damping ratio: higher `damping` param increases damping; overshoot lowers it.
         let bodyC = damping * (1.0 - 0.7 * overshoot)
-        let ax = bodyK * toRest.dx - bodyC * velocity.dx
-        let ay = bodyK * toRest.dy - bodyC * velocity.dy
+        let ax = bodyK * toTarget.dx - bodyC * velocity.dx
+        let ay = bodyK * toTarget.dy - bodyC * velocity.dy
         velocity.dx += ax * dt
         velocity.dy += ay * dt
         center.x += velocity.dx * dt
