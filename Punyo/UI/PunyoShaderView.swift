@@ -34,7 +34,7 @@ struct PunyoShaderView<Background: View>: View {
             .float2(physics.center),
             .float2(CGVector(dx: physics.deformation.dx,
                              dy: physics.deformation.dy)),
-            .float(physics.radius),
+            .float2(CGSize(width: physics.radiusX, height: physics.radiusY)),
             .float(params.viscosity),
             .float(params.elasticity),
         ])

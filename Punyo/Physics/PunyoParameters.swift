@@ -3,10 +3,10 @@ import Observation
 
 @Observable
 final class PunyoParameters {
-    var viscosity: Double = 0.35
-    var elasticity: Double = 180.0
-    var damping: Double = 8.0
-    var overshoot: Double = 0.35
+    var viscosity: Double = 0.22
+    var elasticity: Double = 160.0
+    var damping: Double = 6.0
+    var overshoot: Double = 0.55
     var fleeSpeed: Double = 420.0
 
     static let viscosityRange: ClosedRange<Double> = 0.0...1.0
@@ -16,10 +16,10 @@ final class PunyoParameters {
     static let fleeSpeedRange: ClosedRange<Double> = 0.0...1200.0
 
     func reset() {
-        viscosity = 0.35
-        elasticity = 180.0
-        damping = 8.0
-        overshoot = 0.35
+        viscosity = 0.22
+        elasticity = 160.0
+        damping = 6.0
+        overshoot = 0.55
         fleeSpeed = 420.0
     }
 }

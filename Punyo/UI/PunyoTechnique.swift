@@ -8,6 +8,7 @@ enum PunyoEffectKind {
 }
 
 enum PunyoTechnique: String, CaseIterable, Identifiable {
+    case toon          = "Toon"
     case sdfBase       = "SDF基本"
     case sdfSSS        = "SSS"
     case sdfSSSRefract = "屈折"
@@ -16,6 +17,7 @@ enum PunyoTechnique: String, CaseIterable, Identifiable {
 
     var shaderName: String {
         switch self {
+        case .toon:          return "punyo_toon"
         case .sdfBase:       return "punyo_sdfBase"
         case .sdfSSS:        return "punyo_sdfSSS"
         case .sdfSSSRefract: return "punyo_sdfSSSRefract"
@@ -24,10 +26,9 @@ enum PunyoTechnique: String, CaseIterable, Identifiable {
 
     var effectKind: PunyoEffectKind {
         switch self {
-        case .sdfBase, .sdfSSS:
+        case .toon, .sdfBase, .sdfSSS:
             return .colorEffect
         case .sdfSSSRefract:
-            // Metal side uses up to ~42 px of offset. 64 gives headroom.
             return .layerEffect(maxSampleOffset: CGSize(width: 64, height: 64))
         }
     }
@@ -35,5 +36,5 @@ enum PunyoTechnique: String, CaseIterable, Identifiable {
 
 @Observable
 final class PunyoRenderSettings {
-    var technique: PunyoTechnique = .sdfBase
+    var technique: PunyoTechnique = .toon
 }
