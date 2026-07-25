@@ -3,6 +3,7 @@ import SwiftUI
 struct DebugSliderPanel: View {
     @Bindable var params: PunyoParameters
     @Bindable var settings: PunyoRenderSettings
+    let physics: PunyoPhysics
     @Binding var isExpanded: Bool
 
     var body: some View {
@@ -52,9 +53,37 @@ struct DebugSliderPanel: View {
             slider("減衰",     value: $params.damping,     range: PunyoParameters.dampingRange,     fmt: "%.1f")
             slider("行き過ぎ", value: $params.overshoot,   range: PunyoParameters.overshootRange,   fmt: "%.2f")
             slider("逃げ速度", value: $params.fleeSpeed,   range: PunyoParameters.fleeSpeedRange,   fmt: "%.0f")
+            slider("疲労",     value: $params.fatigue,     range: PunyoParameters.fatigueRange,     fmt: "%.2f")
+            slider("好奇心",   value: $params.curiosity,   range: PunyoParameters.curiosityRange,   fmt: "%.2f")
+            Divider().opacity(0.4)
+            staminaReadout
         }
         .padding(.horizontal, 16)
         .padding(.bottom, 14)
+    }
+
+    // Live stamina is the one thing you can't tune by feel alone — seeing the
+    // bar drain is what makes the fatigue slider adjustable.
+    private var staminaReadout: some View {
+        HStack(spacing: 10) {
+            Text("体力")
+                .font(.caption.weight(.medium))
+                .frame(width: 64, alignment: .leading)
+            GeometryReader { geo in
+                ZStack(alignment: .leading) {
+                    Capsule()
+                        .fill(.quaternary)
+                    Capsule()
+                        .fill(physics.isCaptured ? Color.orange : Color.green)
+                        .frame(width: geo.size.width * CGFloat(physics.stamina))
+                }
+            }
+            .frame(height: 6)
+            Text(physics.isCaptured ? "捕獲中" : String(format: "%.2f", physics.stamina))
+                .font(.caption.monospacedDigit())
+                .frame(width: 54, alignment: .trailing)
+                .foregroundStyle(.secondary)
+        }
     }
 
     private var techniquePicker: some View {

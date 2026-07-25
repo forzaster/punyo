@@ -96,7 +96,37 @@ final class PunyoHapticEngine {
         self.player = nil
     }
 
-    // MARK: - Transient (reserved for future capture feedback)
+    // MARK: - Capture
+
+    // The "ぷちっ" of catching it: one hard, sharp hit followed a beat later by
+    // a duller, softer one. The pair is what makes it read as something giving
+    // way rather than a generic click.
+    func capturePop() {
+        guard let engine = ensureEngine() else { return }
+        let snap = CHHapticEvent(
+            eventType: .hapticTransient,
+            parameters: [
+                CHHapticEventParameter(parameterID: .hapticIntensity, value: 1.0),
+                CHHapticEventParameter(parameterID: .hapticSharpness, value: 0.9),
+            ],
+            relativeTime: 0
+        )
+        let echo = CHHapticEvent(
+            eventType: .hapticTransient,
+            parameters: [
+                CHHapticEventParameter(parameterID: .hapticIntensity, value: 0.45),
+                CHHapticEventParameter(parameterID: .hapticSharpness, value: 0.15),
+            ],
+            relativeTime: 0.045
+        )
+        do {
+            let pattern = try CHHapticPattern(events: [snap, echo], parameters: [])
+            let p = try engine.makePlayer(with: pattern)
+            try p.start(atTime: CHHapticTimeImmediate)
+        } catch {}
+    }
+
+    // MARK: - Transient
 
     func transientTap(intensity: Float, sharpness: Float) {
         guard let engine = ensureEngine() else { return }

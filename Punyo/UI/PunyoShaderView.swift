@@ -10,9 +10,15 @@ struct PunyoShaderView<Background: View>: View {
     let settings: PunyoRenderSettings
     @ViewBuilder let background: () -> Background
 
+    // Shader time must be seconds since this view appeared, not an absolute
+    // timestamp: a Shader argument lands in Metal as float32, and an epoch of
+    // ~7.9e8 quantizes to steps of ~64 seconds there, which freezes anything
+    // driven by sin(time).
+    @State private var origin = Date()
+
     var body: some View {
         TimelineView(.animation) { context in
-            let t = context.date.timeIntervalSinceReferenceDate
+            let t = context.date.timeIntervalSince(origin)
             let shader = makeShader(time: t)
             switch settings.technique.effectKind {
             case .colorEffect:
@@ -37,6 +43,8 @@ struct PunyoShaderView<Background: View>: View {
             .float2(CGSize(width: physics.radiusX, height: physics.radiusY)),
             .float(params.viscosity),
             .float(params.elasticity),
+            .float(physics.stamina),
+            .float2(physics.velocity),
         ])
     }
 }

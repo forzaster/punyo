@@ -25,16 +25,19 @@ struct ContentView: View {
                 DebugSliderPanel(
                     params: params,
                     settings: settings,
+                    physics: physics,
                     isExpanded: $panelExpanded
                 )
             }
             .contentShape(Rectangle())
             .gesture(dragGesture)
             .onAppear {
+                physics.bounds = geo.size
                 physics.setRest(CGPoint(x: geo.size.width / 2,
                                         y: geo.size.height / 2))
             }
             .onChange(of: geo.size) { _, new in
+                physics.bounds = new
                 physics.setRest(CGPoint(x: new.width / 2, y: new.height / 2))
             }
         }
@@ -94,12 +97,24 @@ struct ContentView: View {
 
     private func stepPhysics(time: TimeInterval) {
         physics.step(time: time, params: params)
-        if physics.isFingerDown {
-            let level = physics.deformationLevel
-            let intensity = Float(0.18 + 0.82 * level)
-            let sharpness = Float(0.20 + 0.55 * level)
-            haptics.update(intensity: intensity, sharpness: sharpness)
+
+        // Consumed outside the touch check so a capture that lands on the same
+        // frame as the release still fires, and never leaks into the next touch.
+        if physics.consumeCapturePop() {
+            haptics.capturePop()
         }
+
+        guard physics.isFingerDown else { return }
+        let level = physics.deformationLevel
+        var intensity = Float(0.18 + 0.82 * level)
+        var sharpness = Float(0.20 + 0.55 * level)
+        if physics.isCaptured {
+            // Held: a dull rumble under the squeeze. It's struggling, and the
+            // struggle fades as it wears out.
+            intensity = max(intensity, Float(0.25 + 0.45 * physics.stamina))
+            sharpness = min(sharpness, 0.25)
+        }
+        haptics.update(intensity: intensity, sharpness: sharpness)
     }
 }
 
