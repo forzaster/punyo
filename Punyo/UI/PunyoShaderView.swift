@@ -1,9 +1,9 @@
 import SwiftUI
 
 // Full-screen surface that runs the currently selected puni shader on the
-// given background content. Techniques that need the background (refraction)
-// use .layerEffect; opaque techniques use .colorEffect. Swap the shader
-// function name to swap the visual.
+// given background content. Techniques that need the background (refraction,
+// the material surface) use .layerEffect; opaque bench techniques use
+// .colorEffect. Swap the shader function name to swap the visual.
 struct PunyoShaderView<Background: View>: View {
     let physics: PunyoPhysics
     let params: PunyoParameters
@@ -32,7 +32,10 @@ struct PunyoShaderView<Background: View>: View {
     private func makeShader(time: TimeInterval) -> Shader {
         let function = ShaderFunction(library: .default,
                                       name: settings.technique.shaderName)
-        return Shader(function: function, arguments: [
+
+        // Order here must match the Metal signature exactly, after the implicit
+        // position and colour/layer parameters.
+        var arguments: [Shader.Argument] = [
             .boundingRect,
             .float(time),
             .float2(physics.fingerPosition),
@@ -41,10 +44,32 @@ struct PunyoShaderView<Background: View>: View {
             .float2(CGVector(dx: physics.deformation.dx,
                              dy: physics.deformation.dy)),
             .float2(CGSize(width: physics.radiusX, height: physics.radiusY)),
-            .float(params.viscosity),
-            .float(params.elasticity),
-            .float(physics.stamina),
-            .float2(physics.velocity),
         ])
+
+        if settings.technique.usesAppearance {
+            arguments.append(.float(physics.stamina))
+            arguments.append(.float2(physics.velocity))
+            arguments.append(contentsOf: settings.material.appearance.shaderArguments)
+        } else {
+            arguments.append(.float(params.viscosity))
+            arguments.append(.float(params.elasticity))
+        }
+
+        return Shader(function: function, arguments: arguments)
+    }
+}
+
+private extension PunyoAppearance {
+    // Packed into two float4s so the ordering stays checkable against the Metal
+    // signature at a glance.
+    var shaderArguments: [Shader.Argument] {
+        [
+            .float3(CGFloat(baseColor.r), CGFloat(baseColor.g), CGFloat(baseColor.b)),
+            .float3(CGFloat(innerColor.r), CGFloat(innerColor.g), CGFloat(innerColor.b)),
+            .float4(CGFloat(translucency), CGFloat(refraction),
+                    CGFloat(fresnel), CGFloat(opacity)),
+            .float4(CGFloat(specStrength), CGFloat(specPower),
+                    CGFloat(metallic), CGFloat(grain)),
+        ]
     }
 }

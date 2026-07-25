@@ -31,7 +31,7 @@ struct DebugSliderPanel: View {
                 Text(isExpanded ? "閉じる" : "パラメータ")
                     .font(.subheadline.weight(.semibold))
                 Spacer()
-                Button("リセット") { params.reset() }
+                Button("リセット") { params.reset(to: settings.material.physics) }
                     .font(.caption)
                     .buttonStyle(.borderless)
                     .opacity(isExpanded ? 1 : 0)
@@ -46,6 +46,7 @@ struct DebugSliderPanel: View {
 
     private var content: some View {
         VStack(spacing: 10) {
+            materialRow
             techniquePicker
             Divider().opacity(0.4)
             slider("粘度",     value: $params.viscosity,   range: PunyoParameters.viscosityRange,   fmt: "%.2f")
@@ -84,6 +85,49 @@ struct DebugSliderPanel: View {
                 .frame(width: 54, alignment: .trailing)
                 .foregroundStyle(.secondary)
         }
+    }
+
+    // Selecting a material writes its physics preset into the live parameters,
+    // so the sliders below immediately show what that substance is made of and
+    // stay editable from there.
+    private var materialRow: some View {
+        HStack(spacing: 10) {
+            Text("素材")
+                .font(.caption.weight(.medium))
+                .frame(width: 64, alignment: .leading)
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 6) {
+                    ForEach(PunyoMaterialLibrary.all) { material in
+                        chip(material.name,
+                             selected: settings.material.id == material.id) {
+                            settings.material = material
+                        }
+                    }
+                    chip("日替わり", selected: false) {
+                        settings.material = PunyoMaterialLibrary.daily()
+                    }
+                }
+                .padding(.vertical, 2)
+            }
+        }
+    }
+
+    private func chip(_ title: String,
+                      selected: Bool,
+                      action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Text(title)
+                .font(.caption.weight(.medium))
+                .padding(.horizontal, 11)
+                .padding(.vertical, 5)
+                .background(
+                    Capsule().fill(selected
+                                   ? Color.accentColor
+                                   : Color.primary.opacity(0.12))
+                )
+                .foregroundStyle(selected ? Color.white : Color.primary)
+        }
+        .buttonStyle(.plain)
     }
 
     private var techniquePicker: some View {

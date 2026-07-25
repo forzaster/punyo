@@ -40,10 +40,14 @@ struct ContentView: View {
                 physics.bounds = geo.size
                 physics.setRest(CGPoint(x: geo.size.width / 2,
                                         y: geo.size.height / 2))
+                params.apply(settings.material.physics)
             }
             .onChange(of: geo.size) { _, new in
                 physics.bounds = new
                 physics.setRest(CGPoint(x: new.width / 2, y: new.height / 2))
+            }
+            .onChange(of: settings.material.id) { _, _ in
+                params.apply(settings.material.physics)
             }
         }
         .ignoresSafeArea()
@@ -106,7 +110,7 @@ struct ContentView: View {
         let margin: CGFloat = 90
         return CGPoint(
             x: min(max(physics.center.x, margin), max(margin, size.width - margin)),
-            y: max(60, physics.center.y - physics.radius - 40)
+            y: max(60, physics.center.y - physics.radiusMean - 40)
         )
     }
 

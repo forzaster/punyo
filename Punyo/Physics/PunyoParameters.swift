@@ -1,6 +1,9 @@
 import Foundation
 import Observation
 
+// The live, tunable physics values. A material writes its preset in here on
+// selection; the sliders keep editing the same values afterwards, so picking a
+// material is a starting point rather than a lock.
 @Observable
 final class PunyoParameters {
     var viscosity: Double = 0.22
@@ -22,13 +25,19 @@ final class PunyoParameters {
     static let fatigueRange: ClosedRange<Double> = 0.0...1.0
     static let curiosityRange: ClosedRange<Double> = 0.0...1.0
 
-    func reset() {
-        viscosity = 0.22
-        elasticity = 160.0
-        damping = 6.0
-        overshoot = 0.55
-        fleeSpeed = 420.0
-        fatigue = 0.22
-        curiosity = 0.5
+    func apply(_ preset: PunyoPhysicsPreset) {
+        viscosity = preset.viscosity
+        elasticity = preset.elasticity
+        damping = preset.damping
+        overshoot = preset.overshoot
+        fleeSpeed = preset.fleeSpeed
+        fatigue = preset.fatigue
+        curiosity = preset.curiosity
+    }
+
+    // Reset means "back to this material", not back to some global default —
+    // otherwise the button fights whichever material is selected.
+    func reset(to preset: PunyoPhysicsPreset) {
+        apply(preset)
     }
 }
