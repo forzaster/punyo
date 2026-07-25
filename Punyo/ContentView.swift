@@ -5,6 +5,7 @@ struct ContentView: View {
     @State private var physics = PunyoPhysics()
     @State private var settings = PunyoRenderSettings()
     @State private var panelExpanded = false
+    @State private var haptics = PunyoHapticEngine()
 
     var body: some View {
         GeometryReader { geo in
@@ -78,17 +79,27 @@ struct ContentView: View {
                 let now = Date().timeIntervalSinceReferenceDate
                 if !physics.isFingerDown {
                     physics.beginTouch(at: value.location, time: now)
+                    // Kick continuous haptics off at a low baseline so the
+                    // contact itself has a felt onset before deformation ramps up.
+                    haptics.begin(intensity: 0.2, sharpness: 0.3)
                 } else {
                     physics.updateTouch(to: value.location, time: now)
                 }
             }
             .onEnded { _ in
                 physics.endTouch()
+                haptics.end()
             }
     }
 
     private func stepPhysics(time: TimeInterval) {
         physics.step(time: time, params: params)
+        if physics.isFingerDown {
+            let level = physics.deformationLevel
+            let intensity = Float(0.18 + 0.82 * level)
+            let sharpness = Float(0.20 + 0.55 * level)
+            haptics.update(intensity: intensity, sharpness: sharpness)
+        }
     }
 }
 
