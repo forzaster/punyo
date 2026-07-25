@@ -44,7 +44,7 @@ struct PunyoShaderView<Background: View>: View {
             .float2(CGVector(dx: physics.deformation.dx,
                              dy: physics.deformation.dy)),
             .float2(CGSize(width: physics.radiusX, height: physics.radiusY)),
-        ])
+        ]
 
         if settings.technique.usesAppearance {
             arguments.append(.float(physics.stamina))

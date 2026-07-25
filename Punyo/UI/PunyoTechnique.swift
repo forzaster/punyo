@@ -37,12 +37,11 @@ enum PunyoTechnique: String, CaseIterable, Identifiable {
 
     var effectKind: PunyoEffectKind {
         switch self {
-        case .toon, .sdfBase, .sdfSSS:
         case .material:
             // Refraction reaches 42 px and the metallic mirror sample 54 px.
             // 64 covers both.
             return .layerEffect(maxSampleOffset: CGSize(width: 64, height: 64))
-        case .sdfBase, .sdfSSS:
+        case .toon, .sdfBase, .sdfSSS:
             return .colorEffect
         case .sdfSSSRefract:
             return .layerEffect(maxSampleOffset: CGSize(width: 64, height: 64))
