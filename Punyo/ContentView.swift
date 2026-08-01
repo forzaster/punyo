@@ -27,6 +27,15 @@ struct ContentView: View {
                     }
                 }
 
+                // Dedicated touch layer sitting above the shader and below the
+                // debug panel. Attaching the drag gesture to a Color.clear with
+                // its own contentShape keeps hit-testing predictable: the
+                // shader/background can't swallow the touch, and the panel's
+                // buttons stay on top because they're rendered after this.
+                Color.clear
+                    .contentShape(Rectangle())
+                    .gesture(dragGesture)
+
                 DebugSliderPanel(
                     params: params,
                     settings: settings,
@@ -34,8 +43,6 @@ struct ContentView: View {
                     isExpanded: $panelExpanded
                 )
             }
-            .contentShape(Rectangle())
-            .gesture(dragGesture)
             .onAppear {
                 physics.bounds = geo.size
                 physics.setRest(CGPoint(x: geo.size.width / 2,
