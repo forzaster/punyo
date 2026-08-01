@@ -22,6 +22,7 @@ struct ContentView: View {
                         ) {
                             background
                         }
+                        PunyoEyesView(physics: physics)
                         PunyoSpeechView(speaker: speaker,
                                         anchor: speechAnchor(in: geo.size))
                     }
