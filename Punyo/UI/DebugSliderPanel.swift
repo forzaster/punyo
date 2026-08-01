@@ -47,6 +47,7 @@ struct DebugSliderPanel: View {
     private var content: some View {
         VStack(spacing: 10) {
             materialRow
+            toonToggleRow
             techniquePicker
             Divider().opacity(0.4)
             slider("粘度",     value: $params.viscosity,   range: PunyoParameters.viscosityRange,   fmt: "%.2f")
@@ -128,6 +129,25 @@ struct DebugSliderPanel: View {
                 .foregroundStyle(selected ? Color.white : Color.primary)
         }
         .buttonStyle(.plain)
+    }
+
+    // Top-level style switch: the same material colors, rendered flat/cel-like
+    // instead of the default lit surface. Backed by `settings.technique` so the
+    // technique picker stays a valid override for anyone poking at bench
+    // shaders.
+    private var toonToggleRow: some View {
+        HStack(spacing: 10) {
+            Text("Toon風")
+                .font(.caption.weight(.medium))
+                .frame(width: 64, alignment: .leading)
+            Toggle("", isOn: Binding(
+                get: { settings.technique == .toonMaterial },
+                set: { settings.technique = $0 ? .toonMaterial : .material }
+            ))
+            .labelsHidden()
+            .disabled(!settings.technique.usesAppearance)
+            Spacer()
+        }
     }
 
     private var techniquePicker: some View {

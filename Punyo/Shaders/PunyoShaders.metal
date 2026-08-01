@@ -278,6 +278,104 @@ static inline float punyoFBM(float2 p) {
     return half4(half3(outCol), 1.0);
 }
 
+// --- Toon-shaded material ---------------------------------------------------
+// Same appearance uniforms as punyo_material, but rendered in a toon / mascot
+// style: quantized diffuse bands, hard specular hotspot, dark ink outline,
+// soft blush cheeks. Refraction and metallic sampling are dropped (a toon
+// look wants flat shading, not the background bent through it), which lets
+// this run as a colorEffect rather than a layerEffect.
+
+[[ stitchable ]] half4 punyo_toonMaterial(
+    float2 position,
+    half4 currentColor,
+    float4 boundingRect,
+    float time,
+    float2 fingerPos,
+    float fingerActive,
+    float2 center,
+    float2 deformation,
+    float2 axes,
+    float stamina,
+    float2 velocity,
+    float3 baseColor,
+    float3 innerColor,
+    float4 optics,
+    float4 surface
+) {
+    float tired = clamp(1.0 - stamina, 0.0, 1.0);
+    float sd = sdPunyoSilhouette(position, center, axes, deformation);
+    float coverage = punyoCoverage(sd);
+    if (coverage < 0.001) {
+        return currentColor;
+    }
+
+    float bodyOpacity  = optics.w;
+    float specStrength = surface.x;
+    float grain        = surface.w;
+
+    float3 n = punyoNormal(position, center, axes, deformation);
+    float sdScale = min(axes.x, axes.y);
+    float inside = max(0.0, -sd);
+    float thickness = clamp(inside / max(sdScale, 0.001), 0.0, 1.0);
+
+    // Same rim-fray treatment as the material shader, so sand/smoke materials
+    // don't turn into a hard circle when rendered toon-style.
+    if (grain > 0.001) {
+        float2 gp = (position - center) * 0.25;
+        float nx = punyoFBM(gp + float2(1.7, 0.0)) - punyoFBM(gp - float2(1.7, 0.0));
+        float ny = punyoFBM(gp + float2(0.0, 1.7)) - punyoFBM(gp - float2(0.0, 1.7));
+        n = normalize(n + float3(nx, ny, 0.0) * grain * 0.5);
+
+        float edge = 1.0 - thickness;
+        float2 fp = (position - center) * 0.08 + float2(time * 0.06, 0.0);
+        float fray = punyoFBM(fp);
+        coverage *= clamp(1.0 - grain * edge * edge * (0.9 - fray), 0.0, 1.0);
+    }
+
+    float3 L = normalize(float3(-0.35, -0.55, 0.75));
+    float3 V = float3(0.0, 0.0, 1.0);
+    float3 H = normalize(L + V);
+    float diff = dot(n, L);
+    float spec = pow(max(0.0, dot(n, H)), 40.0);
+
+    // Three lit bands + a shadow band. Thresholds smoothed just enough that
+    // curved silhouettes don't alias.
+    float d1 = smoothstep(0.10, 0.15, diff);
+    float d2 = smoothstep(0.42, 0.48, diff);
+    float d3 = smoothstep(0.78, 0.83, diff);
+    float toonDiff = 0.35 + 0.20 * d1 + 0.25 * d2 + 0.20 * d3;
+
+    float3 base   = punyoFatigueTint(baseColor, tired);
+    float3 shadow = punyoFatigueTint(innerColor, tired) * 0.75;
+    float3 body   = mix(shadow, base, toonDiff);
+
+    // Ink outline: darken pixels within a narrow ring inside the silhouette.
+    float outline = 1.0 - smoothstep(1.5, 4.0, -sd);
+    body *= mix(1.0, 0.30, outline);
+
+    // Hard specular hotspot, weighted by the material's spec strength so glass
+    // and mercury still read as shinier than mochi.
+    float toonSpec = smoothstep(0.55, 0.62, spec);
+    body += float3(1.0, 0.98, 1.0) * toonSpec * (0.55 + 0.45 * specStrength);
+
+    // Two soft blush spots on the upper dome.
+    float2 blushDir1 = float2(-0.35, -0.15);
+    float2 blushDir2 = float2( 0.35, -0.15);
+    float2 relN = (position - center) / axes;
+    float b1 = smoothstep(0.32, 0.08, length(relN - blushDir1));
+    float b2 = smoothstep(0.32, 0.08, length(relN - blushDir2));
+    body = mix(body, body * float3(1.15, 0.78, 0.88), min(1.0, (b1 + b2) * 0.5));
+
+    if (grain > 0.001) {
+        float speck = punyoFBM((position - center) * 0.9) - 0.5;
+        body *= 1.0 + speck * grain * 0.35;
+    }
+
+    float bodyAlpha = coverage * bodyOpacity;
+    half3 outCol = mix(currentColor.rgb, half3(body), half(bodyAlpha));
+    return half4(outCol, max(currentColor.a, half(bodyAlpha)));
+}
+
 // --- Technique 1: SDF base (dome, Lambert + Blinn-Phong) --------------------
 
 [[ stitchable ]] half4 punyo_sdfBase(

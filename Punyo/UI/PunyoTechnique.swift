@@ -11,6 +11,9 @@ enum PunyoTechnique: String, CaseIterable, Identifiable {
     case toon          = "Toon"
     // The appearance-driven surface every material runs through.
     case material      = "素材"
+    // Toon shading applied to the selected material's colors. Same appearance
+    // uniforms as `.material`; different visual style.
+    case toonMaterial  = "Toon素材"
     // The bench techniques kept from phase 0, for comparing one effect at a
     // time without a material's numbers in the way.
     case sdfBase       = "SDF基本"
@@ -23,6 +26,7 @@ enum PunyoTechnique: String, CaseIterable, Identifiable {
         switch self {
         case .toon:          return "punyo_toon"
         case .material:      return "punyo_material"
+        case .toonMaterial:  return "punyo_toonMaterial"
         case .sdfBase:       return "punyo_sdfBase"
         case .sdfSSS:        return "punyo_sdfSSS"
         case .sdfSSSRefract: return "punyo_sdfSSSRefract"
@@ -32,7 +36,7 @@ enum PunyoTechnique: String, CaseIterable, Identifiable {
     // Whether this technique reads the material appearance uniforms. The bench
     // techniques have their own fixed look and take a shorter argument list.
     var usesAppearance: Bool {
-        self == .material
+        self == .material || self == .toonMaterial
     }
 
     var effectKind: PunyoEffectKind {
@@ -41,7 +45,7 @@ enum PunyoTechnique: String, CaseIterable, Identifiable {
             // Refraction reaches 42 px and the metallic mirror sample 54 px.
             // 64 covers both.
             return .layerEffect(maxSampleOffset: CGSize(width: 64, height: 64))
-        case .toon, .sdfBase, .sdfSSS:
+        case .toon, .toonMaterial, .sdfBase, .sdfSSS:
             return .colorEffect
         case .sdfSSSRefract:
             return .layerEffect(maxSampleOffset: CGSize(width: 64, height: 64))
