@@ -103,9 +103,24 @@ final class PunyoPhysics {
         fingerPosition = point
     }
 
-    func endTouch() {
+    func endTouch(time: TimeInterval) {
         isFingerDown = false
         fingerVelocity = .zero
+
+        // Bounce on release, scaled by how long the touch was held. A brief
+        // tap gets a small pop; a sustained hold launches the puni upward
+        // with a lively bounce that the settle spring then reels back in.
+        if let start = touchStartTime {
+            let held = max(0.0, time - start)
+            // Saturates near 1.2 s: past that, holding longer doesn't keep
+            // stacking energy — the bounce reads as "as much as it can hold".
+            let strength = CGFloat(min(1.0, held / 1.2))
+            let baseKick: CGFloat = 90
+            let peakKick: CGFloat = 520
+            let kick = baseKick + (peakKick - baseKick) * strength
+            velocity.dy -= kick
+        }
+        touchStartTime = nil
     }
 
     // One-shot event for the moment of capture, consumed by whatever reacts to

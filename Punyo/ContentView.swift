@@ -106,7 +106,8 @@ struct ContentView: View {
                 }
             }
             .onEnded { _ in
-                physics.endTouch()
+                let now = Date().timeIntervalSinceReferenceDate
+                physics.endTouch(time: now)
                 haptics.end()
             }
     }
