@@ -13,7 +13,11 @@ struct ContentView: View {
             ZStack(alignment: .bottom) {
                 TimelineView(.animation) { context in
                     let t = context.date.timeIntervalSinceReferenceDate
-                    let _ = step(time: t)
+                    // Defer the physics tick out of this body evaluation: mutating
+                    // observable state that PunyoShaderView's inner TimelineView
+                    // reads back triggers a same-transaction re-eval loop that
+                    // pegs the main thread and starves touch delivery entirely.
+                    let _: Void = DispatchQueue.main.async { step(time: t) }
                     ZStack {
                         PunyoShaderView(
                             physics: physics,
