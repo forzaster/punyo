@@ -7,6 +7,10 @@ struct ContentView: View {
     @State private var panelExpanded = false
     @State private var haptics = PunyoHapticEngine()
     @State private var speaker = PunyoSpeaker()
+    @State private var recorder = PunyoGestureRecorder()
+    @State private var modelSource = FoundationModelSpeechSource()
+    // Kept across catches so the descriptor can spot repeated手癖.
+    @State private var lastFeatures: PunyoGestureFeatures?
 
     var body: some View {
         GeometryReader { geo in
@@ -17,7 +21,10 @@ struct ContentView: View {
                     // observable state that PunyoShaderView's inner TimelineView
                     // reads back triggers a same-transaction re-eval loop that
                     // pegs the main thread and starves touch delivery entirely.
-                    let _: Void = DispatchQueue.main.async { step(time: t) }
+                    // Task { @MainActor } instead of DispatchQueue so the async
+                    // model call inside speaker.speak can be launched from a
+                    // main-actor context without extra hops.
+                    let _: Task<Void, Never> = Task { @MainActor in step(time: t) }
                     ZStack {
                         PunyoShaderView(
                             physics: physics,
@@ -45,6 +52,8 @@ struct ContentView: View {
                     params: params,
                     settings: settings,
                     physics: physics,
+                    speaker: speaker,
+                    modelSource: modelSource,
                     isExpanded: $panelExpanded
                 )
             }
@@ -53,6 +62,11 @@ struct ContentView: View {
                 physics.setRest(CGPoint(x: geo.size.width / 2,
                                         y: geo.size.height / 2))
                 params.apply(settings.material.physics)
+                // On-device model becomes the primary source; the speaker
+                // falls back to templates automatically when it declines or
+                // is unavailable.
+                speaker.source = modelSource
+                speaker.persona = modelSource.persona
             }
             .onChange(of: geo.size) { _, new in
                 physics.bounds = new
@@ -103,16 +117,22 @@ struct ContentView: View {
                 let now = Date().timeIntervalSinceReferenceDate
                 if !physics.isFingerDown {
                     physics.beginTouch(at: value.location, time: now)
+                    recorder.begin(at: value.location, time: now)
                     // Kick continuous haptics off at a low baseline so the
                     // contact itself has a felt onset before deformation ramps up.
                     haptics.begin(intensity: 0.2, sharpness: 0.3)
                 } else {
                     physics.updateTouch(to: value.location, time: now)
+                    recorder.record(at: value.location, time: now)
                 }
             }
             .onEnded { _ in
                 let now = Date().timeIntervalSinceReferenceDate
                 physics.endTouch(time: now)
+                // A touch that ended without a catch: drop the samples on
+                // the floor. Consistent with the privacy rule — no raw
+                // trajectory outlives the gesture that produced it.
+                recorder.cancel()
                 haptics.end()
             }
     }
@@ -127,6 +147,7 @@ struct ContentView: View {
         )
     }
 
+    @MainActor
     private func step(time: TimeInterval) {
         physics.step(time: time, params: params)
         speaker.step(time: time)
@@ -135,7 +156,17 @@ struct ContentView: View {
         // frame as the release still fires, and never leaks into the next touch.
         if let capture = physics.consumeCapture() {
             haptics.capturePop()
-            speaker.speak(for: capture, at: time)
+            let features = recorder.snapshot(
+                endTime: time,
+                grabMissCount: physics.perTouchGrabMisses,
+                deformationPeak: physics.perTouchDeformationPeak,
+                radiusMean: physics.radiusMean
+            )
+            let descriptor = PunyoDescriptorFactory.make(
+                from: features, recentHabit: lastFeatures
+            )
+            lastFeatures = features
+            speaker.speak(for: capture, descriptor: descriptor, at: time)
         }
 
         guard physics.isFingerDown else { return }

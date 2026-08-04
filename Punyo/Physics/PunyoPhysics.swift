@@ -39,6 +39,17 @@ final class PunyoPhysics {
     private var captureCount: Int = 0
     private var lastCaptureTime: TimeInterval?
 
+    // Per-touch stats consumed by the gesture recorder at capture. Reset in
+    // beginTouch, so a chase that ends in a lift-off (no catch) simply
+    // discards them — the recorder is what asks for them, and it only asks
+    // on capture.
+    private(set) var perTouchDeformationPeak: CGFloat = 0
+    // A "missed grab" is a stretch of time inside the grab radius that was
+    // interrupted before captureHold elapsed. Only counted once per entry —
+    // a jittery finger sitting on the edge does not rack up dozens.
+    private(set) var perTouchGrabMisses: Int = 0
+    private var wasBuildingCapture: Bool = false
+
     private var lastStepTime: TimeInterval?
 
     // Slightly wider than tall gives the puni a softer, characterful silhouette.
@@ -90,6 +101,9 @@ final class PunyoPhysics {
         // A chase is one touch: catching it requires lifting off, so the length
         // of this touch is exactly how long the catch took.
         touchStartTime = time
+        perTouchDeformationPeak = 0
+        perTouchGrabMisses = 0
+        wasBuildingCapture = false
     }
 
     func updateTouch(to point: CGPoint, time: TimeInterval) {
@@ -207,6 +221,14 @@ final class PunyoPhysics {
                          viscosity: viscosity,
                          overshoot: overshoot,
                          dt: dt)
+
+        // Sampled after deformation update so a slam that lands on this frame
+        // still counts. Only tracked while the finger is on the puni —
+        // rebounds after release aren't part of "how it was caught".
+        if isFingerDown {
+            let mag = hypot(deformation.dx, deformation.dy)
+            if mag > perTouchDeformationPeak { perTouchDeformationPeak = mag }
+        }
     }
 
     // MARK: - Pieces
@@ -234,9 +256,11 @@ final class PunyoPhysics {
         let grabRadius = captureRadius * (1.0 + 0.5 * CGFloat(1.0 - stamina))
         if fingerDist < grabRadius {
             captureContact += dt
+            wasBuildingCapture = true
             if captureContact >= captureHold {
                 isCaptured = true
                 captureContact = 0
+                wasBuildingCapture = false
                 captureCount += 1
                 pendingCapture = PunyoCaptureEvent(
                     stamina: stamina,
@@ -247,7 +271,14 @@ final class PunyoPhysics {
                 lastCaptureTime = time
             }
         } else {
+            // Finger slid off before the hold window closed: that's one
+            // fumble. Guarded by wasBuildingCapture so a finger that never
+            // touched the body doesn't get counted.
+            if wasBuildingCapture {
+                perTouchGrabMisses += 1
+            }
             captureContact = 0
+            wasBuildingCapture = false
         }
     }
 
