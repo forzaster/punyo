@@ -60,6 +60,8 @@ struct DebugSliderPanel: View {
             slider("疲労",     value: $params.fatigue,     range: PunyoParameters.fatigueRange,     fmt: "%.2f")
             slider("好奇心",   value: $params.curiosity,   range: PunyoParameters.curiosityRange,   fmt: "%.2f")
             Divider().opacity(0.4)
+            infinityBlock
+            Divider().opacity(0.4)
             staminaReadout
             Divider().opacity(0.4)
             personaRow
@@ -69,6 +71,33 @@ struct DebugSliderPanel: View {
         }
         .padding(.horizontal, 16)
         .padding(.bottom, 14)
+    }
+
+    // ♾️ pose sliders. Three knobs total per the spec — radius (輪の丸み),
+    // spacing (くびれの太さ), threshold (しきい値). Threshold slider bottoms
+    // out on PunyoParameters.infinityThresholdFloor: below that value the
+    // metaball field shatters into flicker, so it's a hard floor rather
+    // than a soft warning.
+    private var infinityBlock: some View {
+        VStack(spacing: 8) {
+            HStack {
+                Text("♾️ ポーズ")
+                    .font(.caption.weight(.semibold))
+                Spacer()
+                if physics.infinityPose.isVisible {
+                    Text(String(format: "進行 %.0f%%",
+                                physics.infinityPose.progress * 100))
+                        .font(.caption2.monospacedDigit())
+                        .foregroundStyle(.secondary)
+                }
+            }
+            slider("輪の半径", value: $params.infinityRadius,
+                   range: PunyoParameters.infinityRadiusRange, fmt: "%.2f")
+            slider("くびれ",   value: $params.infinitySpacing,
+                   range: PunyoParameters.infinitySpacingRange, fmt: "%.2f")
+            slider("しきい値", value: $params.infinityThreshold,
+                   range: PunyoParameters.infinityThresholdRange, fmt: "%.2f")
+        }
     }
 
     // MARK: - Speech debug
@@ -290,7 +319,7 @@ struct DebugSliderPanel: View {
                 .font(.caption.weight(.medium))
                 .frame(width: 64, alignment: .leading)
             Picker("", selection: $settings.technique) {
-                ForEach(PunyoTechnique.allCases) { tech in
+                ForEach(PunyoTechnique.allCases.filter { $0.isPickable }) { tech in
                     Text(tech.rawValue).tag(tech)
                 }
             }

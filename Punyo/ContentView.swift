@@ -11,6 +11,12 @@ struct ContentView: View {
     @State private var modelSource = FoundationModelSpeechSource()
     // Kept across catches so the descriptor can spot repeated手癖.
     @State private var lastFeatures: PunyoGestureFeatures?
+    // ♾️ pose detector — one shared instance across touches so it accumulates
+    // samples during the current stroke and clears them on release.
+    @State private var infinityDetector = PunyoInfinityDetector()
+    // Which technique to render right now. Diverges from settings.technique
+    // during the ♾️ pose so the metaball shader takes over automatically.
+    @State private var activeTechnique: PunyoTechnique = .material
 
     var body: some View {
         GeometryReader { geo in
@@ -29,7 +35,8 @@ struct ContentView: View {
                         PunyoShaderView(
                             physics: physics,
                             params: params,
-                            settings: settings
+                            settings: settings,
+                            techniqueOverride: activeTechnique
                         ) {
                             background
                         }
@@ -118,12 +125,22 @@ struct ContentView: View {
                 if !physics.isFingerDown {
                     physics.beginTouch(at: value.location, time: now)
                     recorder.begin(at: value.location, time: now)
+                    infinityDetector.begin(at: value.location, time: now)
                     // Kick continuous haptics off at a low baseline so the
                     // contact itself has a felt onset before deformation ramps up.
                     haptics.begin(intensity: 0.2, sharpness: 0.3)
                 } else {
                     physics.updateTouch(to: value.location, time: now)
                     recorder.record(at: value.location, time: now)
+                    // Detector short-circuits once the pose is active — we
+                    // don't want a wobble mid-hold to retrigger.
+                    if !physics.infinityPose.isVisible,
+                       let axis = infinityDetector.record(at: value.location, time: now) {
+                        physics.beginInfinityPose(axis: axis)
+                        // Punch the release feedback into a satisfying
+                        // "click" as the two lobes separate.
+                        haptics.transientTap(intensity: 0.8, sharpness: 0.55)
+                    }
                 }
             }
             .onEnded { _ in
@@ -133,6 +150,11 @@ struct ContentView: View {
                 // the floor. Consistent with the privacy rule — no raw
                 // trajectory outlives the gesture that produced it.
                 recorder.cancel()
+                infinityDetector.end()
+                // Finger up: if a ♾️ pose is engaged, this is the intentional
+                // split. If it never engaged, endInfinityPose is a no-op
+                // (target already 0) and no split fires.
+                physics.endInfinityPose(params: params)
                 haptics.end()
             }
     }
@@ -152,6 +174,18 @@ struct ContentView: View {
         physics.step(time: time, params: params)
         speaker.step(time: time)
 
+        // Pose-driven render swap. Kept here so the technique tracks the
+        // eased progress: the moment the pose becomes visible we're on the
+        // metaball shader; the moment it fully collapses we're back to the
+        // selected technique. The selection-picker technique is what we
+        // fall back to.
+        let poseWanted = physics.infinityPose.isVisible
+            ? PunyoTechnique.infinityMaterial
+            : settings.technique
+        if poseWanted != activeTechnique {
+            activeTechnique = poseWanted
+        }
+
         // Consumed outside the touch check so a capture that lands on the same
         // frame as the release still fires, and never leaks into the next touch.
         if let capture = physics.consumeCapture() {
@@ -167,6 +201,13 @@ struct ContentView: View {
             )
             lastFeatures = features
             speaker.speak(for: capture, descriptor: descriptor, at: time)
+        }
+
+        // The split event is what "one body becoming two" hangs off. Until a
+        // full split/merge system lands, the confirmation is a haptic tap —
+        // enough to tell that the pose committed and the pieces separated.
+        if physics.consumeSplit() != nil {
+            haptics.transientTap(intensity: 0.9, sharpness: 0.7)
         }
 
         guard physics.isFingerDown else { return }

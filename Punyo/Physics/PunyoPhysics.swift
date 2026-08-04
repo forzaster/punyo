@@ -15,6 +15,16 @@ final class PunyoPhysics {
     var deformation: CGVector = .zero
     var deformationVelocity: CGVector = .zero
 
+    // MARK: - Pose (♾️ metaball variant)
+    //
+    // Separate from the ellipse deformation because it isn't simulated: it's
+    // a target the shader honours while the finger holds the pose. The pose
+    // owns its own progress + axis; physics owns the step schedule.
+    private(set) var infinityPose = PunyoInfinityPose()
+    // One-shot event produced when the pose collapses on release. Consumed
+    // by whatever handles "one body becoming two".
+    private var pendingSplit: PunyoSplitEvent?
+
     // MARK: - Touch
 
     var isFingerDown: Bool = false
@@ -144,6 +154,75 @@ final class PunyoPhysics {
         return pendingCapture
     }
 
+    // MARK: - Pose control
+
+    // Called by the gesture detector when a ♾️ trace is recognized. Axis is
+    // the direction the two lobes will separate along — typically the long
+    // axis of the drawn loop, but we keep it caller-supplied so any future
+    // pose can pick its own spine.
+    func beginInfinityPose(axis: CGVector) {
+        let len = hypot(axis.dx, axis.dy)
+        infinityPose.axis = len > 0.0001
+            ? CGVector(dx: axis.dx / len, dy: axis.dy / len)
+            : CGVector(dx: 1, dy: 0)
+        infinityPose.target = 1
+    }
+
+    // Ends the pose. If it was engaged (fully entered), the collapse queues a
+    // split event for the caller to hand off to the split/merge system. If it
+    // never fully engaged, it just collapses silently.
+    func endInfinityPose(params: PunyoParameters) {
+        let wasEngaged = infinityPose.isEngaged
+        infinityPose.target = 0
+        if wasEngaged {
+            queueSplit(params: params)
+        }
+    }
+
+    // Poll for a pending split. Consumed once; caller decides what to do
+    // (spawn two bodies, log it, whatever).
+    func consumeSplit() -> PunyoSplitEvent? {
+        defer { pendingSplit = nil }
+        return pendingSplit
+    }
+
+    // Snapshot of where the two lobes are right now, in world coordinates.
+    // Derived from center + eased spacing along the pose axis. Rendered by
+    // the metaball shader; also the source of truth for a split event.
+    func infinityLobeCenters(params: PunyoParameters) -> (CGPoint, CGPoint) {
+        let spacing = infinityLobeSpacing(params: params)
+            * CGFloat(infinityPose.progress)
+        let ax = infinityPose.axis
+        let half = spacing * 0.5
+        let a = CGPoint(x: center.x - ax.dx * half,
+                        y: center.y - ax.dy * half)
+        let b = CGPoint(x: center.x + ax.dx * half,
+                        y: center.y + ax.dy * half)
+        return (a, b)
+    }
+
+    // Full separation (progress==1) between the two lobe centers, in points.
+    // Kept public so the shader marshaller and the debug readout agree.
+    func infinityLobeSpacing(params: PunyoParameters) -> CGFloat {
+        radiusMean * CGFloat(params.infinitySpacing)
+    }
+
+    // Lobe radius derived from the mean body radius. Constant across the two
+    // lobes — the "big two" case. A third pinch lobe (small) is derived from
+    // this in the shader if we later expose it.
+    func infinityLobeRadius(params: PunyoParameters) -> CGFloat {
+        radiusMean * CGFloat(params.infinityRadius)
+    }
+
+    private func queueSplit(params: PunyoParameters) {
+        let (a, b) = infinityLobeCenters(params: params)
+        pendingSplit = PunyoSplitEvent(
+            lobeA: a, lobeB: b,
+            radius: infinityLobeRadius(params: params),
+            axis: infinityPose.axis
+        )
+    }
+
     // MARK: - Simulation
 
     func step(time: TimeInterval, params: PunyoParameters) {
@@ -228,6 +307,17 @@ final class PunyoPhysics {
         if isFingerDown {
             let mag = hypot(deformation.dx, deformation.dy)
             if mag > perTouchDeformationPeak { perTouchDeformationPeak = mag }
+        }
+
+        // Pose easing is decoupled from all the spring math — it just moves
+        // toward target on its own schedule. Also runs the "threshold floor
+        // means split now" check while the pose is engaged, so pushing the
+        // slider into a shattered field commits the split rather than
+        // showing a broken silhouette.
+        infinityPose.step(dt: elapsed)
+        if infinityPose.isEngaged &&
+           params.infinityThreshold <= PunyoParameters.infinityThresholdFloor + 1e-4 {
+            endInfinityPose(params: params)
         }
     }
 

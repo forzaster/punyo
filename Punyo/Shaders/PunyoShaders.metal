@@ -60,6 +60,87 @@ static inline float punyoCoverage(float sd) {
     return smoothstep(aa, -aa, sd);
 }
 
+// --- Metaball field (♾️ pose) -----------------------------------------------
+//
+// N-lobe scalar field, summed 2D metaballs. F(p) = Σ R_i² / d_i², with d
+// floored to keep the value finite at the exact lobe center. Isosurface at
+// F(p) == threshold. We render {p: F(p) ≥ threshold} as the silhouette.
+//
+// Positions and radii are packed into fixed-size arrays because Metal doesn't
+// take variable-length uniform arrays through SwiftUI's Shader arguments; we
+// pay for a fixed cap (4) unconditionally, which is fine for 2- and 3-lobe
+// setups and leaves room for the chain-of-lobes extension without recompiling
+// the shader.
+
+#define kPunyoMaxLobes 4
+
+static inline float punyoMetaballField(float2 p,
+                                       thread float2 lobes[kPunyoMaxLobes],
+                                       thread float  radii[kPunyoMaxLobes],
+                                       int count) {
+    float sum = 0.0;
+    // Loop bound is a runtime int but count is a small uniform — Metal's
+    // shader compiler handles the dynamic length cleanly, and the branchless
+    // early-out below keeps zero-radius lobes free.
+    for (int i = 0; i < kPunyoMaxLobes; ++i) {
+        if (i >= count) break;
+        float r = radii[i];
+        if (r < 0.1) continue;
+        float2 d = p - lobes[i];
+        // Floor the denominator so the field stays finite at the lobe
+        // center. eps set roughly to (r * 0.15)² — the sample is inside
+        // the lobe anyway, so the exact value doesn't matter for
+        // silhouette; it just needs to not divide by zero.
+        float d2 = max(dot(d, d), r * r * 0.02);
+        sum += (r * r) / d2;
+    }
+    return sum;
+}
+
+// "SDF proxy" derived from the field, in point units. The field is
+// dimensionless (r²/d²), so we scale (threshold - field) by the lobe radius
+// to get something whose zero crossing is roughly the silhouette in pixels
+// and where `punyoCoverage` gives a stable AA band.
+static inline float punyoMetaballSD(float2 p,
+                                    thread float2 lobes[kPunyoMaxLobes],
+                                    thread float  radii[kPunyoMaxLobes],
+                                    int count,
+                                    float threshold,
+                                    float scale) {
+    float f = punyoMetaballField(p, lobes, radii, count);
+    return (threshold - f) * scale;
+}
+
+static inline float punyoMetaballHeight(float2 p,
+                                        thread float2 lobes[kPunyoMaxLobes],
+                                        thread float  radii[kPunyoMaxLobes],
+                                        int count,
+                                        float threshold,
+                                        float scale) {
+    float f = punyoMetaballField(p, lobes, radii, count);
+    // Excess above threshold, mapped to a pseudo dome height. The 0.6
+    // exponent flattens the peak so lobe centers don't turn into spikes.
+    float over = max(0.0, f - threshold);
+    return scale * pow(over, 0.6);
+}
+
+static inline float3 punyoMetaballNormal(float2 p,
+                                         thread float2 lobes[kPunyoMaxLobes],
+                                         thread float  radii[kPunyoMaxLobes],
+                                         int count,
+                                         float threshold,
+                                         float scale) {
+    const float eps = 1.75;
+    float hxP = punyoMetaballHeight(p + float2(eps, 0.0), lobes, radii, count, threshold, scale);
+    float hxN = punyoMetaballHeight(p - float2(eps, 0.0), lobes, radii, count, threshold, scale);
+    float hyP = punyoMetaballHeight(p + float2(0.0, eps), lobes, radii, count, threshold, scale);
+    float hyN = punyoMetaballHeight(p - float2(0.0, eps), lobes, radii, count, threshold, scale);
+    float3 grad = float3((hxP - hxN) / (2.0 * eps),
+                         (hyP - hyN) / (2.0 * eps),
+                         1.0);
+    return normalize(float3(-grad.x, -grad.y, grad.z));
+}
+
 static inline float3 punyoFatigueTint(float3 base, float tired) {
     float luma = dot(base, float3(0.299, 0.587, 0.114));
     return mix(base, float3(luma), tired * 0.45) * (1.0 - tired * 0.18);
@@ -273,6 +354,116 @@ static inline float punyoFBM(float2 p) {
 
     // Body opacity is what lets smoke and glass sit *in* the scene rather than
     // on top of it.
+    float bodyAlpha = coverage * bodyOpacity;
+    float3 outCol = mix(bg, col, bodyAlpha);
+    return half4(half3(outCol), 1.0);
+}
+
+// --- Metaball material (♾️ pose) --------------------------------------------
+//
+// Same appearance uniforms as punyo_material, but the silhouette comes from
+// a summed metaball field instead of a single ellipse. Uses up to 4 lobes:
+// 2 for the base ♾️, 3 for an explicit constriction control, 4 for a chain
+// extension. Reads the pose data as four float2 lobe positions + one float4
+// of radii + a count + a threshold.
+//
+// The lighting path is a trimmed version of the material shader: pseudo SSS,
+// specular, fresnel — but no refraction or metallic environment sampling.
+// Those two effects sample the layer with an offset that assumes a coherent
+// dome; on a peanut / dumbbell shape the sample lands in nonsense and reads
+// as smeared halos. Cut them here and keep the pose visually honest.
+
+[[ stitchable ]] half4 punyo_infinityMaterial(
+    float2 position,
+    SwiftUI::Layer layer,
+    float4 boundingRect,
+    float time,
+    float2 fingerPos,
+    float fingerActive,
+    float2 center,
+    float2 axes,
+    float stamina,
+    float2 lobe0,
+    float2 lobe1,
+    float2 lobe2,
+    float2 lobe3,
+    float4 lobeRadii,
+    float lobeCount,
+    float threshold,
+    float3 baseColor,
+    float3 innerColor,
+    float4 optics,
+    float4 surface
+) {
+    float2 lobes[kPunyoMaxLobes] = { lobe0, lobe1, lobe2, lobe3 };
+    float  radii[kPunyoMaxLobes] = { lobeRadii.x, lobeRadii.y, lobeRadii.z, lobeRadii.w };
+    int count = clamp(int(round(lobeCount)), 0, kPunyoMaxLobes);
+
+    // Scale for the SD proxy — anchored on the biggest lobe so AA and normal
+    // steps stay stable when the two big lobes are the same size and a
+    // small constriction lobe is added.
+    float rMax = max(max(radii[0], radii[1]), max(radii[2], radii[3]));
+    float scale = max(4.0, rMax);
+
+    float sd = punyoMetaballSD(position, lobes, radii, count, threshold, scale);
+    float coverage = punyoCoverage(sd);
+    if (coverage < 0.001) {
+        return layer.sample(position);
+    }
+
+    float tired = clamp(1.0 - stamina, 0.0, 1.0);
+    float bodyOpacity  = optics.w;
+    float translucency = optics.x;
+    float fresnelAmt   = optics.z;
+    float specStrength = surface.x;
+    float specPower    = surface.y;
+    float grain        = surface.w;
+
+    float3 n = punyoMetaballNormal(position, lobes, radii, count, threshold, scale);
+
+    if (grain > 0.001) {
+        float2 gp = (position - center) * 0.25;
+        float nx = punyoFBM(gp + float2(1.7, 0.0)) - punyoFBM(gp - float2(1.7, 0.0));
+        float ny = punyoFBM(gp + float2(0.0, 1.7)) - punyoFBM(gp - float2(0.0, 1.7));
+        n = normalize(n + float3(nx, ny, 0.0) * grain * 0.7);
+    }
+
+    // Thickness from the height field, normalized against the largest lobe
+    // so lighting reads consistently across radii.
+    float h = punyoMetaballHeight(position, lobes, radii, count, threshold, scale);
+    float thickness = clamp(h / max(scale, 0.001), 0.0, 1.0);
+
+    float3 L = normalize(float3(-0.4, -0.55, 0.75));
+    float3 V = float3(0.0, 0.0, 1.0);
+    float3 H = normalize(L + V);
+
+    const float wrap = 0.3;
+    float diff = max(0.0, (dot(n, L) + wrap) / (1.0 + wrap));
+    float spec = pow(max(0.0, dot(n, H)), max(1.0, specPower))
+               * specStrength * (1.0 - tired * 0.5);
+    float fresnel = pow(1.0 - max(0.0, n.z), 3.0) * fresnelAmt;
+
+    float3 base = punyoFatigueTint(baseColor, tired);
+    float backFacing = max(0.0, dot(-n, L));
+    float transmission = pow(1.0 - thickness, 2.5);
+    float3 sss = punyoFatigueTint(innerColor, tired)
+               * (backFacing * transmission * translucency * 1.6);
+
+    float3 col = base * (0.30 + 0.70 * diff) + sss;
+    col += float3(1.0, 0.94, 0.97) * spec;
+    col += base * fresnel * 0.55;
+
+    if (grain > 0.001) {
+        float speck = punyoFBM((position - center) * 0.9) - 0.5;
+        col *= 1.0 + speck * grain * 0.45;
+    }
+
+    // Contact shadow around the whole outline — same trick as the ellipse
+    // shader, but the SD proxy is only nominally in pixels, so we bias the
+    // fall-off with `scale` rather than a hardcoded radius.
+    float shadow = smoothstep(scale * 0.55, 0.0, sd) * (1.0 - coverage);
+    float3 bg = float3(layer.sample(position).rgb) * (1.0 - shadow * 0.35);
+
     float bodyAlpha = coverage * bodyOpacity;
     float3 outCol = mix(bg, col, bodyAlpha);
     return half4(half3(outCol), 1.0);
