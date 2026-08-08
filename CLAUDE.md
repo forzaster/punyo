@@ -19,6 +19,16 @@ cd <worktree>
 xcodegen generate
 ```
 
+### 自動化フック
+
+`.githooks/` に post-checkout / post-merge / post-rewrite が用意されている。worktree ごとに一度だけ:
+
+```bash
+git config core.hooksPath .githooks
+```
+
+を実行しておくと、`git checkout` / `git pull` / `git rebase` の直後に **`project.yml` か `Punyo/` に差分があれば** 自動で `xcodegen generate` が走る。フックが動いていれば手動実行は不要。動作していないと思ったら `git config --get core.hooksPath` で確認する（未設定の worktree では手動で `xcodegen generate` を打つこと）。
+
 ### 失敗パターン
 
 - リベース後にビルドして `cannot find type 'XXX' in scope` → 十中八九、新規ファイルが pbxproj に登録されていない。`xcodegen generate` を実行する

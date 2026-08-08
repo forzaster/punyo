@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+# git post-rewrite: fires after `git rebase` or `git commit --amend`.
+# stdin gets one "<old_sha> <new_sha>" line per rewritten commit. Compare
+# the first rewritten commit's old sha against current HEAD to catch any
+# net project.yml / Punyo/ change across the whole rebase.
+set -euo pipefail
+first_old="$(awk 'NR==1 { print $1; exit }')"
+[ -n "$first_old" ] || exit 0
+exec "$(dirname "$0")/_regen" "$first_old" HEAD

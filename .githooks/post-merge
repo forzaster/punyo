@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+# git post-merge: fires after `git pull` / `git merge`. ORIG_HEAD is the
+# pre-merge tip; HEAD is the merge result.
+set -euo pipefail
+exec "$(dirname "$0")/_regen" ORIG_HEAD HEAD
