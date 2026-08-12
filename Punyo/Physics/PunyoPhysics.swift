@@ -32,9 +32,10 @@ final class PunyoPhysics {
     static let squashSpread: CGFloat = 0.28
 
     // Multiplier the silhouette's axes are scaled by right now. The ceiling is
-    // the shader's, matched here deliberately: a hard press can carry `squash`
-    // past 1.5 for a frame or two, and if the eyes kept growing after the body
-    // had stopped they would walk straight off the face.
+    // the shader's, matched here deliberately: if the eyes kept growing after
+    // the body had stopped they would walk straight off the face. `applySquash`
+    // clamps to the same 1.5, so this is belt-and-braces rather than the only
+    // guard — every consumer of `squash` sees one number.
     var squashSpread: CGFloat {
         1.0 + PunyoPhysics.squashSpread * max(0, min(1.5, squash))
     }
@@ -118,9 +119,15 @@ final class PunyoPhysics {
     }
 
     // 0 at the ellipse boundary and 1 at its center.
+    //
+    // Measured against the *drawn* silhouette, not the rest silhouette: the
+    // shader and the eyes both scale by `squashSpread`, so dividing by the raw
+    // radii would report depth 0 across the outer band of a squashed body — the
+    // finger is visibly on the puni while every contact response reads "miss",
+    // and it slides out from under the touch.
     private func contactDepth(from point: CGPoint) -> CGFloat {
-        let dx = (point.x - center.x) / radiusX
-        let dy = (point.y - center.y) / radiusY
+        let dx = (point.x - center.x) / (radiusX * squashSpread)
+        let dy = (point.y - center.y) / (radiusY * squashSpread)
         return max(0, 1 - hypot(dx, dy))
     }
 
@@ -294,13 +301,15 @@ final class PunyoPhysics {
         // release is spent dazed rather than instantly bolting again.
         if isFingerDown && !isCaptured && dazedTimer <= 0 {
             let byDistance = max(0, min(1, 1 - fingerDist / fleeRadius))
-            // Contact beats flight. A finger that has actually landed inside
-            // the silhouette is a poke, and a poke has to register as one —
-            // otherwise the body slides out from under it before the springs
-            // can build and nothing visible happens at all. The chase is still
-            // the entire behaviour for a finger that is near but not on it,
-            // which is where it always mattered.
-            threat = Double(byDistance * (1 - contactGrip))
+            // Contact mostly beats flight, but only mostly. A finger that has
+            // landed inside the silhouette is a poke and has to register as
+            // one — otherwise the body slides out from under it before the
+            // springs can build and nothing visible happens at all. Suppressing
+            // threat outright instead deletes the chase for any finger that
+            // ever touches down, so a full grip leaves a quarter of the flight
+            // impulse alive: it still squirms under the finger, and stamina
+            // keeps draining while held rather than quietly refilling.
+            threat = Double(byDistance * (1 - 0.75 * contactGrip))
         } else {
             threat = 0
         }
@@ -401,7 +410,20 @@ final class PunyoPhysics {
     ) -> CGFloat {
         // Roughly: overshoot 0 is dead flat, 0.5 gives a single visible bounce,
         // 1.0 wobbles. Damping scales that around its own default.
-        let zeta = (0.92 - 0.72 * overshoot) * max(0.30, min(1.8, damping / 8.0))
+        //
+        // Normalized against `dampingRange` so the whole slider stays live: a
+        // linear map with a ceiling went flat partway along (at /8 with a 1.8
+        // cap everything above damping 14.4 was identical, parking Sand (16)
+        // and Glass (14) at the ceiling with their authored damping partly
+        // thrown away). Raising the ceiling instead would have to reach zeta
+        // 4.6 to cover the top of the range, which glues the body solid.
+        //
+        // The square root buys both: it lands on the same 2.5 maximum that
+        // settles cleanly, but only at the very top of the slider, so every
+        // position in between still moves the result.
+        let span = CGFloat(PunyoParameters.dampingRange.upperBound)
+        let scale = max(0.30, 2.5 * (max(0, damping) / span).squareRoot())
+        let zeta = (0.92 - 0.72 * overshoot) * scale
         return 2 * (stiffness.squareRoot()) * zeta
     }
 
@@ -413,7 +435,12 @@ final class PunyoPhysics {
     // release that would make it flee harder, lose contact further, and bolt —
     // a runaway that reads on screen as the touch simply not registering.
     private func updateContactGrip(depth: CGFloat, dt: CGFloat) {
-        let onBody = smoothstep(0, 0.06, depth)
+        // Ramped over a third of the way in, not saturated 6% past the rim: a
+        // grip that hits 1 the instant any part of the finger is on the body
+        // makes every landed touch a full grab, which is how the flee
+        // behaviour disappeared. A rim graze now grips loosely, a centred
+        // press grips fully.
+        let onBody = smoothstep(0, 0.35, depth)
         let rate: CGFloat = onBody > contactGrip ? 30.0 : 3.0
         contactGrip += (onBody - contactGrip) * min(1, rate * dt)
     }
@@ -549,16 +576,27 @@ final class PunyoPhysics {
         }
 
         let deformK = elasticity * 1.4
-        let deformC = criticalDamping(stiffness: deformK,
+        // Viscosity only ever moves the target a fraction of the way, so the
+        // spring the body actually feels is `deformK * approach`. Handing
+        // `criticalDamping` the raw stiffness would quietly overdamp the
+        // sticky materials — at Smoke's viscosity the real zeta came out a
+        // third above nominal, so "fraction of critical" drifted per material.
+        let approach = 1.0 - viscosity * 0.45
+        let deformC = criticalDamping(stiffness: deformK * approach,
                                       damping: damping,
                                       overshoot: overshoot)
-        let approach = 1.0 - viscosity * 0.45
         let effectiveTargetX = deformation.dx + (targetDeform.dx - deformation.dx) * approach
         let effectiveTargetY = deformation.dy + (targetDeform.dy - deformation.dy) * approach
-        let dax = deformK * (effectiveTargetX - deformation.dx) - deformC * deformationVelocity.dx
-        let day = deformK * (effectiveTargetY - deformation.dy) - deformC * deformationVelocity.dy
-        deformationVelocity.dx += dax * dt
-        deformationVelocity.dy += day * dt
+        // Divided damping rather than an explicit `v += (-C*v) * dt` step: the
+        // explicit form diverges the moment `C * dt > 2`, and it gets there on
+        // real presets — a stiff, heavily damped material like Glass lands
+        // around C ≈ 77, which at the 1/30 s frame clamp is well past the
+        // limit and blows the vector up to Inf within a second. Dividing makes
+        // it unconditionally stable, so a late frame costs accuracy instead.
+        deformationVelocity.dx = (deformationVelocity.dx
+            + deformK * (effectiveTargetX - deformation.dx) * dt) / (1 + deformC * dt)
+        deformationVelocity.dy = (deformationVelocity.dy
+            + deformK * (effectiveTargetY - deformation.dy) * dt) / (1 + deformC * dt)
         deformation.dx += deformationVelocity.dx * dt
         deformation.dy += deformationVelocity.dy * dt
     }
@@ -591,13 +629,13 @@ final class PunyoPhysics {
         // that pumps up and down is the one thing that would read as buzzing
         // rather than as a squish, so this settles rather than oscillating.
         let squashK = elasticity * 1.8
-        let squashC = criticalDamping(stiffness: squashK,
+        // Effective stiffness, and divided damping, for the same reasons as the
+        // lateral channel above.
+        let approach = 1.0 - viscosity * 0.45
+        let squashC = criticalDamping(stiffness: squashK * approach,
                                       damping: damping,
                                       overshoot: overshoot * 0.55)
-        let approach = 1.0 - viscosity * 0.45
         let effectiveTarget = squash + (target - squash) * approach
-        // Divided damping, same as the lateral channel and for the same reason:
-        // a late frame has to cost accuracy, not stability.
         squashVelocity = (squashVelocity + squashK * (effectiveTarget - squash) * dt)
             / (1 + squashC * dt)
         squash += squashVelocity * dt
@@ -606,6 +644,14 @@ final class PunyoPhysics {
         if squash < 0 {
             squash = 0
             squashVelocity = max(0, squashVelocity)
+        }
+        // And never exceed what the silhouette can actually show. `squashSpread`
+        // and the shader both stop at 1.5; clamping the state itself rather
+        // than only the consumers keeps the haptics and the speech layer
+        // reading the same number the body is drawing.
+        if squash > 1.5 {
+            squash = 1.5
+            squashVelocity = min(0, squashVelocity)
         }
     }
 
