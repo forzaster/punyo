@@ -56,6 +56,7 @@ struct DebugSliderPanel: View {
             slider("弾性",     value: $params.elasticity,  range: PunyoParameters.elasticityRange,  fmt: "%.0f")
             slider("減衰",     value: $params.damping,     range: PunyoParameters.dampingRange,     fmt: "%.1f")
             slider("行き過ぎ", value: $params.overshoot,   range: PunyoParameters.overshootRange,   fmt: "%.2f")
+            slider("つぶれ",   value: $params.squashiness, range: PunyoParameters.squashinessRange, fmt: "%.2f")
             slider("逃げ速度", value: $params.fleeSpeed,   range: PunyoParameters.fleeSpeedRange,   fmt: "%.0f")
             slider("疲労",     value: $params.fatigue,     range: PunyoParameters.fatigueRange,     fmt: "%.2f")
             slider("好奇心",   value: $params.curiosity,   range: PunyoParameters.curiosityRange,   fmt: "%.2f")

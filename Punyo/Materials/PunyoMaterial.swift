@@ -37,6 +37,10 @@ struct PunyoPhysicsPreset {
     var fleeSpeed: Double
     var fatigue: Double
     var curiosity: Double
+    // How far a press flattens the body. The scalar deformation channel, so it
+    // is what separates something you can squash flat from something that just
+    // sits there when you push on it.
+    var squashiness: Double
 }
 
 // What gets handed to the material shader. Every field is a weight on an effect

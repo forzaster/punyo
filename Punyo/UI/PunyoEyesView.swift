@@ -29,13 +29,20 @@ struct PunyoEyesView: View {
         // a pair of eyes into the top-left corner for one frame.
         guard c != .zero else { return }
 
-        let axes = CGSize(width: physics.radiusX, height: physics.radiusY)
+        // Squash spreads the silhouette radially in the shader, so the face has
+        // to spread with it — otherwise a good hard press slides the eyes off
+        // the body. Same factor the Metal helper uses.
+        let spread = physics.squashSpread
+        let axes = CGSize(width: physics.radiusX * spread,
+                          height: physics.radiusY * spread)
         // Upper half of the ellipse, symmetric about the vertical axis. These
         // fractions are the "face layout": pinning them to the axes lets the
         // eyes stay in place if the silhouette ever changes size.
         let eyeOffsetX = axes.width * 0.38
         let eyeOffsetY = axes.height * 0.18
-        let whiteRadius = min(axes.width, axes.height) * 0.20
+        // The eyes themselves don't inflate — only their placement follows the
+        // body, so a squashed puni reads as wide-eyed rather than zoomed in.
+        let whiteRadius = min(physics.radiusX, physics.radiusY) * 0.20
         let pupilRadius = whiteRadius * 0.55
         let highlightRadius = whiteRadius * 0.16
 

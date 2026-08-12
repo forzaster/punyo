@@ -13,7 +13,8 @@ extension PunyoMaterial {
             overshoot: 0.22,
             fleeSpeed: 700,
             fatigue: 0.12,
-            curiosity: 0.25
+            curiosity: 0.25,
+            squashiness: 0.15
         ),
         appearance: PunyoAppearance(
             baseColor: PunyoRGB(0.76, 0.79, 0.84),

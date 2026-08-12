@@ -16,6 +16,10 @@ final class PunyoParameters {
     var fatigue: Double = 0.22
     // Pull toward a finger that is keeping its distance.
     var curiosity: Double = 0.5
+    // How far a press flattens it. 0 = holds its shape under a finger, 1 = goes
+    // properly flat. This is the scalar channel, so it is what a dead-centre
+    // poke reads on.
+    var squashiness: Double = 0.6
 
     // --- ♾️ pose (metaball variant) ---
     //
@@ -36,6 +40,7 @@ final class PunyoParameters {
     static let fleeSpeedRange: ClosedRange<Double> = 0.0...1200.0
     static let fatigueRange: ClosedRange<Double> = 0.0...1.0
     static let curiosityRange: ClosedRange<Double> = 0.0...1.0
+    static let squashinessRange: ClosedRange<Double> = 0.0...1.0
 
     static let infinityRadiusRange: ClosedRange<Double> = 0.55...1.20
     static let infinitySpacingRange: ClosedRange<Double> = 0.6...2.2
@@ -54,6 +59,7 @@ final class PunyoParameters {
         fleeSpeed = preset.fleeSpeed
         fatigue = preset.fatigue
         curiosity = preset.curiosity
+        squashiness = preset.squashiness
     }
 
     // Reset means "back to this material", not back to some global default —

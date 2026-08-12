@@ -12,8 +12,32 @@ final class PunyoPhysics {
     // Play area used to keep the puni on screen while it runs around.
     var bounds: CGSize = .zero
 
+    // Lateral / directional bulge. Meaningful only when the finger is off
+    // centre — at the exact centre there is no direction to bulge toward, which
+    // is why it cannot be the only deformation channel.
     var deformation: CGVector = .zero
     var deformationVelocity: CGVector = .zero
+
+    // Scalar squash: how flat the body is being pressed, 0 = round, 1 = fully
+    // squashed. This is the degree of freedom a float2 bulge cannot express —
+    // it peaks exactly where the directional bulge degenerates (finger on the
+    // centre) and falls to zero at the rim, so between the two every contact
+    // point produces a visible response.
+    var squash: CGFloat = 0
+    var squashVelocity: CGFloat = 0
+
+    // How far the silhouette spreads radially at squash == 1. The Metal helper
+    // `punyoSquashSpread` mirrors this number; anything drawn on top of the
+    // shader (the eyes) scales by it so it stays on the body.
+    static let squashSpread: CGFloat = 0.28
+
+    // Multiplier the silhouette's axes are scaled by right now. The ceiling is
+    // the shader's, matched here deliberately: a hard press can carry `squash`
+    // past 1.5 for a frame or two, and if the eyes kept growing after the body
+    // had stopped they would walk straight off the face.
+    var squashSpread: CGFloat {
+        1.0 + PunyoPhysics.squashSpread * max(0, min(1.5, squash))
+    }
 
     // MARK: - Pose (♾️ metaball variant)
     //
@@ -41,6 +65,8 @@ final class PunyoPhysics {
     var isCaptured: Bool = false
     // How urgently it wants to get away right now (0...1).
     private(set) var threat: Double = 0.0
+    // 0...1: how much the finger is actually on the body right now, smoothed.
+    private(set) var contactGrip: CGFloat = 0
 
     private var captureContact: TimeInterval = 0
     private var dazedTimer: TimeInterval = 0
@@ -76,10 +102,15 @@ final class PunyoPhysics {
 
     // Normalized 0..1 measure of how much the puni is currently deformed.
     // Used to drive continuous haptics intensity.
+    //
+    // Both channels count. Combining them in quadrature rather than adding
+    // keeps a poke that is both off-centre and deep from pinning the value at
+    // 1.0, while a dead-centre press — all squash, no bulge — still produces
+    // the haptic it obviously should.
     var deformationLevel: Double {
-        let mag = hypot(deformation.dx, deformation.dy)
-        let scale = radiusMean * 0.8
-        return Double(min(1.0, mag / scale))
+        let lateral = Double(hypot(deformation.dx, deformation.dy) / (radiusMean * 0.8))
+        let scalar = Double(max(0, squash)) * 0.9
+        return min(1.0, (lateral * lateral + scalar * scalar).squareRoot())
     }
 
     var deformationMagnitude: CGFloat {
@@ -91,6 +122,13 @@ final class PunyoPhysics {
         let dx = (point.x - center.x) / radiusX
         let dy = (point.y - center.y) / radiusY
         return max(0, 1 - hypot(dx, dy))
+    }
+
+    // 0 -> 1 across [edge0, edge1], flat outside. Used to shape contact
+    // responses so they ramp instead of switching.
+    private func smoothstep(_ edge0: CGFloat, _ edge1: CGFloat, _ x: CGFloat) -> CGFloat {
+        let t = max(0, min(1, (x - edge0) / max(0.0001, edge1 - edge0)))
+        return t * t * (3 - 2 * t)
     }
 
     // MARK: - Input
@@ -122,7 +160,10 @@ final class PunyoPhysics {
             dx: (point.x - lastFingerPosition.x) / CGFloat(dt),
             dy: (point.y - lastFingerPosition.y) / CGFloat(dt)
         )
-        lastFingerPosition = fingerPosition
+        // The reference has to advance to the point we just measured against.
+        // Carrying the previous `fingerPosition` forward instead would divide a
+        // two-frame displacement by a one-frame dt and report roughly double.
+        lastFingerPosition = point
         lastFingerTime = time
         fingerPosition = point
     }
@@ -245,11 +286,21 @@ final class PunyoPhysics {
 
         updateCapture(fingerDist: fingerDist, time: time, dt: elapsed)
 
+        let depth = isFingerDown ? contactDepth(from: fingerPosition) : 0
+        updateContactGrip(depth: depth, dt: dt)
+
         // Threat falls off to nothing at fleeRadius. A captured or freshly
         // released puni has no threat: caught means caught, and the beat after
         // release is spent dazed rather than instantly bolting again.
         if isFingerDown && !isCaptured && dazedTimer <= 0 {
-            threat = Double(max(0, min(1, 1 - fingerDist / fleeRadius)))
+            let byDistance = max(0, min(1, 1 - fingerDist / fleeRadius))
+            // Contact beats flight. A finger that has actually landed inside
+            // the silhouette is a poke, and a poke has to register as one —
+            // otherwise the body slides out from under it before the springs
+            // can build and nothing visible happens at all. The chase is still
+            // the entire behaviour for a finger that is near but not on it,
+            // which is where it always mattered.
+            threat = Double(byDistance * (1 - contactGrip))
         } else {
             threat = 0
         }
@@ -299,13 +350,30 @@ final class PunyoPhysics {
                          damping: damping,
                          viscosity: viscosity,
                          overshoot: overshoot,
+                         depth: depth,
                          dt: dt)
 
-        // Sampled after deformation update so a slam that lands on this frame
-        // still counts. Only tracked while the finger is on the puni —
-        // rebounds after release aren't part of "how it was caught".
+        applySquash(elasticity: elasticity,
+                    damping: damping,
+                    viscosity: viscosity,
+                    overshoot: overshoot,
+                    squashiness: CGFloat(params.squashiness),
+                    depth: depth,
+                    dt: dt)
+
+        // Sampled after both deformation channels update so a slam that lands
+        // on this frame still counts. Only tracked while the finger is on the
+        // puni — rebounds after release aren't part of "how it was caught".
+        //
+        // Both channels feed it, in quadrature and in point units, with the
+        // same relative weighting `deformationLevel` uses. A dead-centre press
+        // is nearly all squash and almost no lateral bulge, so sampling the
+        // vector alone would hand the speech layer a feather touch for what
+        // was actually the hardest poke available.
         if isFingerDown {
-            let mag = hypot(deformation.dx, deformation.dy)
+            let lateral = hypot(deformation.dx, deformation.dy)
+            let scalar = max(0, squash) * radiusMean * 0.72
+            let mag = (lateral * lateral + scalar * scalar).squareRoot()
             if mag > perTouchDeformationPeak { perTouchDeformationPeak = mag }
         }
 
@@ -321,7 +389,34 @@ final class PunyoPhysics {
         }
     }
 
+    // Damping as a fraction of critical for the given stiffness. Expressing it
+    // this way is what stops the contact transient from blowing past the target:
+    // a fixed absolute damping left a stiff spring wildly underdamped, which is
+    // how a 77pt target used to peak at 182pt. `overshoot` now buys a real,
+    // bounded amount of bounce, and `damping` scales that around its default.
+    private func criticalDamping(
+        stiffness: CGFloat,
+        damping: CGFloat,
+        overshoot: CGFloat
+    ) -> CGFloat {
+        // Roughly: overshoot 0 is dead flat, 0.5 gives a single visible bounce,
+        // 1.0 wobbles. Damping scales that around its own default.
+        let zeta = (0.92 - 0.72 * overshoot) * max(0.30, min(1.8, damping / 8.0))
+        return 2 * (stiffness.squareRoot()) * zeta
+    }
+
     // MARK: - Pieces
+
+    // How firmly the finger currently has it, 0...1. Grabs almost instantly and
+    // lets go slowly. The asymmetry is the point: a poke near the rim only has
+    // to nudge the body a pixel to fall out of contact, and without the slow
+    // release that would make it flee harder, lose contact further, and bolt —
+    // a runaway that reads on screen as the touch simply not registering.
+    private func updateContactGrip(depth: CGFloat, dt: CGFloat) {
+        let onBody = smoothstep(0, 0.06, depth)
+        let rate: CGFloat = onBody > contactGrip ? 30.0 : 3.0
+        contactGrip += (onBody - contactGrip) * min(1, rate * dt)
+    }
 
     private func updateCapture(fingerDist: CGFloat, time: TimeInterval, dt: TimeInterval) {
         if dazedTimer > 0 {
@@ -425,27 +520,38 @@ final class PunyoPhysics {
         damping: CGFloat,
         viscosity: CGFloat,
         overshoot: CGFloat,
+        depth: CGFloat,
         dt: CGFloat
     ) {
         // Target deformation vector: from finger toward center, magnitude grows as
         // finger overlaps body. Viscosity controls how "sticky/slow" the deform target
         // is pursued.
+        //
+        // This channel is the *lateral* squeeze, so it is weighted by how far
+        // off centre the finger is: right in the middle there is no lateral
+        // direction to speak of and `squash` carries the whole response, while
+        // a poke near the rim is almost all sideways bulge.
         var targetDeform = CGVector.zero
-        let depth = isFingerDown ? contactDepth(from: fingerPosition) : 0
         if depth > 0.001 {
             let fromFinger = CGVector(dx: center.x - fingerPosition.x,
                                       dy: center.y - fingerPosition.y)
-            let distance = max(0.0001, hypot(fromFinger.dx, fromFinger.dy))
-            let dirBulgeX = fromFinger.dx / distance
-            let dirBulgeY = fromFinger.dy / distance
-            targetDeform = CGVector(
-                dx: dirBulgeX * depth * radiusMean * 0.85,
-                dy: dirBulgeY * depth * radiusMean * 0.85
-            )
+            let distance = hypot(fromFinger.dx, fromFinger.dy)
+            if distance > 0.0001 {
+                // 0 at the centre, 1 once the finger is a good way out. Kills
+                // the direction singularity instead of dividing through it.
+                let lateral = smoothstep(0, radiusMean * 0.45, distance)
+                let magnitude = depth * lateral * radiusMean * 0.62
+                targetDeform = CGVector(
+                    dx: fromFinger.dx / distance * magnitude,
+                    dy: fromFinger.dy / distance * magnitude
+                )
+            }
         }
 
         let deformK = elasticity * 1.4
-        let deformC = damping * (1.15 - 0.85 * overshoot)
+        let deformC = criticalDamping(stiffness: deformK,
+                                      damping: damping,
+                                      overshoot: overshoot)
         let approach = 1.0 - viscosity * 0.45
         let effectiveTargetX = deformation.dx + (targetDeform.dx - deformation.dx) * approach
         let effectiveTargetY = deformation.dy + (targetDeform.dy - deformation.dy) * approach
@@ -455,6 +561,52 @@ final class PunyoPhysics {
         deformationVelocity.dy += day * dt
         deformation.dx += deformationVelocity.dx * dt
         deformation.dy += deformationVelocity.dy * dt
+    }
+
+    // The scalar half of the deformation: how flat the body is pressed. Peaks
+    // with the finger on the centre and falls to zero at the rim, so it covers
+    // exactly the contacts the directional bulge cannot.
+    private func applySquash(
+        elasticity: CGFloat,
+        damping: CGFloat,
+        viscosity: CGFloat,
+        overshoot: CGFloat,
+        squashiness: CGFloat,
+        depth: CGFloat,
+        dt: CGFloat
+    ) {
+        // Shaped rather than raw: a shallow contact near the rim still reads as
+        // a real press, but the falloff to the boundary stays monotone.
+        let shaped = depth > 0.001 ? pow(depth, 0.6) : 0
+        var target = shaped * squashiness
+
+        // Being held is being squeezed. Capture drags the body onto the finger,
+        // so depth is already near 1 while captured — this just puts a floor
+        // under it so the grip reads as a grip even mid-transit.
+        if isCaptured {
+            target = max(target, 0.65 * squashiness)
+        }
+
+        // Stiffer than the lateral channel and damped a touch harder: a scalar
+        // that pumps up and down is the one thing that would read as buzzing
+        // rather than as a squish, so this settles rather than oscillating.
+        let squashK = elasticity * 1.8
+        let squashC = criticalDamping(stiffness: squashK,
+                                      damping: damping,
+                                      overshoot: overshoot * 0.55)
+        let approach = 1.0 - viscosity * 0.45
+        let effectiveTarget = squash + (target - squash) * approach
+        // Divided damping, same as the lateral channel and for the same reason:
+        // a late frame has to cost accuracy, not stability.
+        squashVelocity = (squashVelocity + squashK * (effectiveTarget - squash) * dt)
+            / (1 + squashC * dt)
+        squash += squashVelocity * dt
+        // Never invert: a negative squash would inflate the silhouette and read
+        // as the body swelling when you let go.
+        if squash < 0 {
+            squash = 0
+            squashVelocity = max(0, squashVelocity)
+        }
     }
 
     private func clampToBounds() {

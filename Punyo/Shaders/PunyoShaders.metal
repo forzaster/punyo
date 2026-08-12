@@ -8,15 +8,31 @@ using namespace metal;
 // coordinate `relN = (p - center) / axes`; the base ellipse boundary is then
 // `|relN| == 1`. Deformation adds an angular bulge in this normalized space,
 // and the SDF is scaled by min(axes) back into approximate point space.
+//
+// Deformation has two channels, because one is not enough. `deformation` is a
+// direction and a magnitude — the lateral bulge of an off-centre poke. `squash`
+// is a scalar: how flat the body is being pressed. A float2 cannot express a
+// finger pressing straight into the middle, since at the centre there is no
+// direction, so the scalar carries that case.
+
+// Squash spreads the silhouette radially. Mirrored in Swift as
+// `PunyoPhysics.squashSpread` so the eyes drawn on top track the same shape.
+static inline float punyoSquashSpread(float squash) {
+    return 1.0 + 0.28 * clamp(squash, 0.0, 1.5);
+}
 
 static inline float sdPunyoSilhouette(float2 p,
                                       float2 center,
                                       float2 axes,
-                                      float2 deformation) {
+                                      float2 deformation,
+                                      float squash) {
+    // Pressed flat, it spreads. Widening the axes here is what makes the
+    // squashed body read as squeezed rather than shrunk.
+    float2 sAxes = axes * punyoSquashSpread(squash);
     float2 rel = p - center;
-    float2 relN = rel / axes;
+    float2 relN = rel / sAxes;
     float dN = length(relN);
-    float sdScale = min(axes.x, axes.y);
+    float sdScale = min(sAxes.x, sAxes.y);
     float dmag = length(deformation);
     float bulgeN = 0.0;
     if (dmag > 0.0001) {
@@ -31,24 +47,32 @@ static inline float sdPunyoSilhouette(float2 p,
 static inline float insideHeight(float2 p,
                                  float2 center,
                                  float2 axes,
-                                 float2 deformation) {
-    float sdScale = min(axes.x, axes.y);
-    float sd = sdPunyoSilhouette(p, center, axes, deformation);
+                                 float2 deformation,
+                                 float squash) {
+    float spread = punyoSquashSpread(squash);
+    float2 sAxes = axes * spread;
+    float sdScale = min(sAxes.x, sAxes.y);
+    float sd = sdPunyoSilhouette(p, center, axes, deformation, squash);
     float inside = max(0.0, -sd);
     // Dome height as if the local slice were a hemisphere of radius sdScale.
     // This gives a pseudo-3D bump even on an ellipsoidal silhouette.
-    return sqrt(max(0.0, sdScale * sdScale - (sdScale - inside) * (sdScale - inside)));
+    float h = sqrt(max(0.0, sdScale * sdScale - (sdScale - inside) * (sdScale - inside)));
+    // Roughly volume preserving: the footprint grew by spread^2, so the dome
+    // gives back the same factor in height and the body genuinely flattens
+    // instead of just getting bigger.
+    return h / (spread * spread);
 }
 
 static inline float3 punyoNormal(float2 p,
                                  float2 center,
                                  float2 axes,
-                                 float2 deformation) {
+                                 float2 deformation,
+                                 float squash) {
     const float eps = 1.5;
-    float hxP = insideHeight(p + float2(eps, 0.0), center, axes, deformation);
-    float hxN = insideHeight(p - float2(eps, 0.0), center, axes, deformation);
-    float hyP = insideHeight(p + float2(0.0, eps), center, axes, deformation);
-    float hyN = insideHeight(p - float2(0.0, eps), center, axes, deformation);
+    float hxP = insideHeight(p + float2(eps, 0.0), center, axes, deformation, squash);
+    float hxN = insideHeight(p - float2(eps, 0.0), center, axes, deformation, squash);
+    float hyP = insideHeight(p + float2(0.0, eps), center, axes, deformation, squash);
+    float hyN = insideHeight(p - float2(0.0, eps), center, axes, deformation, squash);
     float3 grad = float3((hxP - hxN) / (2.0 * eps),
                          (hyP - hyN) / (2.0 * eps),
                          1.0);
@@ -111,17 +135,24 @@ static inline float punyoMetaballSD(float2 p,
     return (threshold - f) * scale;
 }
 
+// `spread` is punyoSquashSpread(squash), already baked into the lobe radii by
+// the caller. It is passed in again only so the dome height can divide it back
+// out — the same rough volume preservation the ellipse path does in
+// `insideHeight`. Pass 1.0 for an unsquashed field.
 static inline float punyoMetaballHeight(float2 p,
                                         thread float2 lobes[kPunyoMaxLobes],
                                         thread float  radii[kPunyoMaxLobes],
                                         int count,
                                         float threshold,
-                                        float scale) {
+                                        float scale,
+                                        float spread) {
     float f = punyoMetaballField(p, lobes, radii, count);
     // Excess above threshold, mapped to a pseudo dome height. The 0.6
     // exponent flattens the peak so lobe centers don't turn into spikes.
     float over = max(0.0, f - threshold);
-    return scale * pow(over, 0.6);
+    // Footprint grew by spread², so the dome gives the same factor back in
+    // height: a pressed ♾️ spreads and flattens instead of merely inflating.
+    return scale * pow(over, 0.6) / (spread * spread);
 }
 
 static inline float3 punyoMetaballNormal(float2 p,
@@ -129,12 +160,13 @@ static inline float3 punyoMetaballNormal(float2 p,
                                          thread float  radii[kPunyoMaxLobes],
                                          int count,
                                          float threshold,
-                                         float scale) {
+                                         float scale,
+                                         float spread) {
     const float eps = 1.75;
-    float hxP = punyoMetaballHeight(p + float2(eps, 0.0), lobes, radii, count, threshold, scale);
-    float hxN = punyoMetaballHeight(p - float2(eps, 0.0), lobes, radii, count, threshold, scale);
-    float hyP = punyoMetaballHeight(p + float2(0.0, eps), lobes, radii, count, threshold, scale);
-    float hyN = punyoMetaballHeight(p - float2(0.0, eps), lobes, radii, count, threshold, scale);
+    float hxP = punyoMetaballHeight(p + float2(eps, 0.0), lobes, radii, count, threshold, scale, spread);
+    float hxN = punyoMetaballHeight(p - float2(eps, 0.0), lobes, radii, count, threshold, scale, spread);
+    float hyP = punyoMetaballHeight(p + float2(0.0, eps), lobes, radii, count, threshold, scale, spread);
+    float hyN = punyoMetaballHeight(p - float2(0.0, eps), lobes, radii, count, threshold, scale, spread);
     float3 grad = float3((hxP - hxN) / (2.0 * eps),
                          (hyP - hyN) / (2.0 * eps),
                          1.0);
@@ -161,16 +193,17 @@ static inline float3 punyoFatigueTint(float3 base, float tired) {
     float2 center,
     float2 deformation,
     float2 axes,
+    float squash,
     float viscosity,
     float elasticity
 ) {
-    float sd = sdPunyoSilhouette(position, center, axes, deformation);
+    float sd = sdPunyoSilhouette(position, center, axes, deformation, squash);
     float coverage = punyoCoverage(sd);
     if (coverage < 0.001) {
         return currentColor;
     }
 
-    float3 n = punyoNormal(position, center, axes, deformation);
+    float3 n = punyoNormal(position, center, axes, deformation, squash);
     float3 L = normalize(float3(-0.35, -0.55, 0.75));
     float3 V = float3(0.0, 0.0, 1.0);
     float3 H = normalize(L + V);
@@ -199,7 +232,7 @@ static inline float3 punyoFatigueTint(float3 base, float tired) {
     // Blush: two soft spots offset toward the top of the dome.
     float2 blushDir1 = float2(-0.35, -0.15);
     float2 blushDir2 = float2( 0.35, -0.15);
-    float2 relN = (position - center) / axes;
+    float2 relN = (position - center) / (axes * punyoSquashSpread(squash));
     float b1 = smoothstep(0.32, 0.08, length(relN - blushDir1));
     float b2 = smoothstep(0.32, 0.08, length(relN - blushDir2));
     body = mix(body, body * float3(1.15, 0.75, 0.85), min(1.0, (b1 + b2) * 0.55));
@@ -256,6 +289,7 @@ static inline float punyoFBM(float2 p) {
     float2 center,
     float2 deformation,
     float2 axes,
+    float squash,
     float stamina,
     float2 velocity,
     float3 baseColor,
@@ -264,8 +298,8 @@ static inline float punyoFBM(float2 p) {
     float4 surface
 ) {
     float tired = clamp(1.0 - stamina, 0.0, 1.0);
-    float sdScale = min(axes.x, axes.y);
-    float sd = sdPunyoSilhouette(position, center, axes, deformation);
+    float sdScale = min(axes.x, axes.y) * punyoSquashSpread(squash);
+    float sd = sdPunyoSilhouette(position, center, axes, deformation, squash);
     float coverage = punyoCoverage(sd);
     if (coverage < 0.001) {
         return layer.sample(position);
@@ -280,7 +314,7 @@ static inline float punyoFBM(float2 p) {
     float metallic     = surface.z;
     float grain        = surface.w;
 
-    float3 n = punyoNormal(position, center, axes, deformation);
+    float3 n = punyoNormal(position, center, axes, deformation, squash);
     float inside = max(0.0, -sd);
     float thickness = clamp(inside / max(sdScale, 0.001), 0.0, 1.0);
 
@@ -372,6 +406,17 @@ static inline float punyoFBM(float2 p) {
 // Those two effects sample the layer with an offset that assumes a coherent
 // dome; on a peanut / dumbbell shape the sample lands in nonsense and reads
 // as smeared halos. Cut them here and keep the pose visually honest.
+//
+// Takes the same geometry prefix as every other entry point, `deformation`
+// and `axes` included, even though the silhouette here comes from the lobes
+// rather than the ellipse. Keeping one prefix for all techniques is what makes
+// the Swift-side argument list checkable — a per-technique prefix is how an
+// argument order quietly drifts and corrupts everything after it.
+//
+// `deformation` is genuinely unused: the lateral bulge is an ellipse-space
+// angular term with no meaning on a two-lobe field. `squash` is not — it
+// scales the lobe radii exactly as it scales the ellipse axes, so a press
+// still reads while the pose is held.
 
 [[ stitchable ]] half4 punyo_infinityMaterial(
     float2 position,
@@ -381,7 +426,9 @@ static inline float punyoFBM(float2 p) {
     float2 fingerPos,
     float fingerActive,
     float2 center,
+    float2 deformation,
     float2 axes,
+    float squash,
     float stamina,
     float2 lobe0,
     float2 lobe1,
@@ -395,8 +442,14 @@ static inline float punyoFBM(float2 p) {
     float4 optics,
     float4 surface
 ) {
+    // Squash fattens every lobe by the same factor the ellipse axes take, so
+    // pressing a held ♾️ spreads the lobes and thickens the waist instead of
+    // doing nothing at all. The dome height divides the factor back out (see
+    // punyoMetaballHeight) so it flattens rather than inflates.
+    float spread = punyoSquashSpread(squash);
     float2 lobes[kPunyoMaxLobes] = { lobe0, lobe1, lobe2, lobe3 };
-    float  radii[kPunyoMaxLobes] = { lobeRadii.x, lobeRadii.y, lobeRadii.z, lobeRadii.w };
+    float  radii[kPunyoMaxLobes] = { lobeRadii.x * spread, lobeRadii.y * spread,
+                                     lobeRadii.z * spread, lobeRadii.w * spread };
     int count = clamp(int(round(lobeCount)), 0, kPunyoMaxLobes);
 
     // Scale for the SD proxy — anchored on the biggest lobe so AA and normal
@@ -419,7 +472,7 @@ static inline float punyoFBM(float2 p) {
     float specPower    = surface.y;
     float grain        = surface.w;
 
-    float3 n = punyoMetaballNormal(position, lobes, radii, count, threshold, scale);
+    float3 n = punyoMetaballNormal(position, lobes, radii, count, threshold, scale, spread);
 
     if (grain > 0.001) {
         float2 gp = (position - center) * 0.25;
@@ -430,7 +483,7 @@ static inline float punyoFBM(float2 p) {
 
     // Thickness from the height field, normalized against the largest lobe
     // so lighting reads consistently across radii.
-    float h = punyoMetaballHeight(position, lobes, radii, count, threshold, scale);
+    float h = punyoMetaballHeight(position, lobes, radii, count, threshold, scale, spread);
     float thickness = clamp(h / max(scale, 0.001), 0.0, 1.0);
 
     float3 L = normalize(float3(-0.4, -0.55, 0.75));
@@ -486,6 +539,7 @@ static inline float punyoFBM(float2 p) {
     float2 center,
     float2 deformation,
     float2 axes,
+    float squash,
     float stamina,
     float2 velocity,
     float3 baseColor,
@@ -494,7 +548,7 @@ static inline float punyoFBM(float2 p) {
     float4 surface
 ) {
     float tired = clamp(1.0 - stamina, 0.0, 1.0);
-    float sd = sdPunyoSilhouette(position, center, axes, deformation);
+    float sd = sdPunyoSilhouette(position, center, axes, deformation, squash);
     float coverage = punyoCoverage(sd);
     if (coverage < 0.001) {
         return currentColor;
@@ -504,8 +558,8 @@ static inline float punyoFBM(float2 p) {
     float specStrength = surface.x;
     float grain        = surface.w;
 
-    float3 n = punyoNormal(position, center, axes, deformation);
-    float sdScale = min(axes.x, axes.y);
+    float3 n = punyoNormal(position, center, axes, deformation, squash);
+    float sdScale = min(axes.x, axes.y) * punyoSquashSpread(squash);
     float inside = max(0.0, -sd);
     float thickness = clamp(inside / max(sdScale, 0.001), 0.0, 1.0);
 
@@ -552,7 +606,7 @@ static inline float punyoFBM(float2 p) {
     // Two soft blush spots on the upper dome.
     float2 blushDir1 = float2(-0.35, -0.15);
     float2 blushDir2 = float2( 0.35, -0.15);
-    float2 relN = (position - center) / axes;
+    float2 relN = (position - center) / (axes * punyoSquashSpread(squash));
     float b1 = smoothstep(0.32, 0.08, length(relN - blushDir1));
     float b2 = smoothstep(0.32, 0.08, length(relN - blushDir2));
     body = mix(body, body * float3(1.15, 0.78, 0.88), min(1.0, (b1 + b2) * 0.5));
@@ -579,16 +633,17 @@ static inline float punyoFBM(float2 p) {
     float2 center,
     float2 deformation,
     float2 axes,
+    float squash,
     float viscosity,
     float elasticity
 ) {
-    float sd = sdPunyoSilhouette(position, center, axes, deformation);
+    float sd = sdPunyoSilhouette(position, center, axes, deformation, squash);
     float coverage = punyoCoverage(sd);
     if (coverage < 0.001) {
         return currentColor;
     }
 
-    float3 n = punyoNormal(position, center, axes, deformation);
+    float3 n = punyoNormal(position, center, axes, deformation, squash);
     float3 L = normalize(float3(-0.4, -0.55, 0.75));
     float3 V = float3(0.0, 0.0, 1.0);
     float3 H = normalize(L + V);
@@ -601,7 +656,7 @@ static inline float punyoFBM(float2 p) {
                 + float3(1.0, 0.85, 0.95) * spec * 0.7
                 + float3(1.0, 0.7, 0.9) * rim * 0.35;
 
-    float sdScale = min(axes.x, axes.y);
+    float sdScale = min(axes.x, axes.y) * punyoSquashSpread(squash);
     float shadow = smoothstep(sdScale * 0.55, 0.0, sd) * (1.0 - coverage);
     half3 bg = currentColor.rgb * half(1.0 - shadow * 0.35);
 
@@ -621,17 +676,18 @@ static inline float punyoFBM(float2 p) {
     float2 center,
     float2 deformation,
     float2 axes,
+    float squash,
     float viscosity,
     float elasticity
 ) {
-    float sd = sdPunyoSilhouette(position, center, axes, deformation);
+    float sd = sdPunyoSilhouette(position, center, axes, deformation, squash);
     float coverage = punyoCoverage(sd);
     if (coverage < 0.001) {
         return currentColor;
     }
 
-    float3 n = punyoNormal(position, center, axes, deformation);
-    float sdScale = min(axes.x, axes.y);
+    float3 n = punyoNormal(position, center, axes, deformation, squash);
+    float sdScale = min(axes.x, axes.y) * punyoSquashSpread(squash);
     float3 L = normalize(float3(-0.4, -0.55, 0.75));
     float3 V = float3(0.0, 0.0, 1.0);
     float3 H = normalize(L + V);
@@ -673,17 +729,18 @@ static inline float punyoFBM(float2 p) {
     float2 center,
     float2 deformation,
     float2 axes,
+    float squash,
     float viscosity,
     float elasticity
 ) {
-    float sd = sdPunyoSilhouette(position, center, axes, deformation);
+    float sd = sdPunyoSilhouette(position, center, axes, deformation, squash);
     float coverage = punyoCoverage(sd);
     if (coverage < 0.001) {
         return layer.sample(position);
     }
 
-    float3 n = punyoNormal(position, center, axes, deformation);
-    float sdScale = min(axes.x, axes.y);
+    float3 n = punyoNormal(position, center, axes, deformation, squash);
+    float sdScale = min(axes.x, axes.y) * punyoSquashSpread(squash);
     float inside = max(0.0, -sd);
     float thickness = clamp(inside / max(sdScale, 0.001), 0.0, 1.0);
 

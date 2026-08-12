@@ -45,18 +45,7 @@ struct PunyoShaderView<Background: View>: View {
             return infinityShader(function: function, time: time)
         }
 
-        // Order here must match the Metal signature exactly, after the implicit
-        // position and colour/layer parameters.
-        var arguments: [Shader.Argument] = [
-            .boundingRect,
-            .float(time),
-            .float2(physics.fingerPosition),
-            .float(physics.isFingerDown ? 1.0 : 0.0),
-            .float2(physics.center),
-            .float2(CGVector(dx: physics.deformation.dx,
-                             dy: physics.deformation.dy)),
-            .float2(CGSize(width: physics.radiusX, height: physics.radiusY)),
-        ]
+        var arguments = geometryPrefix(time: time)
 
         if activeTechnique.usesAppearance {
             arguments.append(.float(physics.stamina))
@@ -70,9 +59,35 @@ struct PunyoShaderView<Background: View>: View {
         return Shader(function: function, arguments: arguments)
     }
 
-    // Metaball marshaller — separate function because the argument list is a
-    // different shape (lobe positions + radii instead of axes/deformation)
-    // and mixing that into the primary path clutters the read.
+    // The geometry block every stitchable entry point takes, in order, right
+    // after the implicit position and colour/layer parameters. Built in one
+    // place on purpose: a technique that assembles its own prefix is how the
+    // order drifts, and a single misplaced float silently reinterprets every
+    // argument after it rather than failing to compile.
+    //
+    // Order must match the Metal signatures exactly:
+    //   float4 boundingRect, float time, float2 fingerPos, float fingerActive,
+    //   float2 center, float2 deformation, float2 axes, float squash
+    private func geometryPrefix(time: TimeInterval) -> [Shader.Argument] {
+        [
+            .boundingRect,
+            .float(time),
+            .float2(physics.fingerPosition),
+            .float(physics.isFingerDown ? 1.0 : 0.0),
+            .float2(physics.center),
+            .float2(CGVector(dx: physics.deformation.dx,
+                             dy: physics.deformation.dy)),
+            .float2(CGSize(width: physics.radiusX, height: physics.radiusY)),
+            // Scalar squash sits with the geometry block, ahead of anything
+            // per-technique: every entry point takes the same shared prefix.
+            .float(physics.squash),
+        ]
+    }
+
+    // Metaball marshaller — separate function because the tail of the argument
+    // list is a different shape (lobe positions + radii instead of the
+    // appearance block's stamina/velocity) and mixing that into the primary
+    // path clutters the read. The geometry prefix is still the shared one.
     private func infinityShader(function: ShaderFunction,
                                 time: TimeInterval) -> Shader {
         let (a, b) = physics.infinityLobeCenters(params: params)
@@ -83,13 +98,8 @@ struct PunyoShaderView<Background: View>: View {
         let lobes: [CGPoint] = [a, b]
         let radii: [CGFloat] = [r, r]
 
-        var arguments: [Shader.Argument] = [
-            .boundingRect,
-            .float(time),
-            .float2(physics.fingerPosition),
-            .float(physics.isFingerDown ? 1.0 : 0.0),
-            .float2(physics.center),
-            .float2(CGSize(width: physics.radiusX, height: physics.radiusY)),
+        var arguments = geometryPrefix(time: time)
+        arguments.append(contentsOf: [
             .float(physics.stamina),
             // Lobe positions padded out to the shader's fixed capacity of 4.
             // Trailing slots have radius 0 (see radiiArg) so the shader skips
@@ -102,7 +112,7 @@ struct PunyoShaderView<Background: View>: View {
                     radiusOrZero(radii, 2), radiusOrZero(radii, 3)),
             .float(Float(lobes.count)),
             .float(Float(params.infinityThreshold)),
-        ]
+        ])
         arguments.append(contentsOf: settings.material.appearance.shaderArguments)
         return Shader(function: function, arguments: arguments)
     }
