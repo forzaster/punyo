@@ -1,6 +1,6 @@
 name: Punyo
 options:
-  bundleIdPrefix: com.punyo
+  bundleIdPrefix: com.forzaster.punyo
   deploymentTarget:
     iOS: "26.0"
   createIntermediateGroups: true
@@ -21,7 +21,7 @@ targets:
       - path: Punyo/Assets.xcassets
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: com.punyo.app
+        PRODUCT_BUNDLE_IDENTIFIER: com.forzaster.punyo.app
         MARKETING_VERSION: "0.1.0"
         CURRENT_PROJECT_VERSION: "1"
         TARGETED_DEVICE_FAMILY: "1,2"

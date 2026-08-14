@@ -25,7 +25,7 @@ cd "$REPO_ROOT"
 SCHEME="${SCHEME:-Punyo}"
 CONFIGURATION="${CONFIGURATION:-Debug}"
 BUILD_DIR="${BUILD_DIR:-build/iphone}"
-BUNDLE_ID="com.punyo.app"
+BUNDLE_ID="com.forzaster.punyo.app"
 
 LAUNCH_AFTER_INSTALL=0
 LIST_DEVICES_ONLY=0
