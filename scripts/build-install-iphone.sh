@@ -96,7 +96,7 @@ PY
     udid="$(xcrun devicectl list devices 2>/dev/null \
       | grep -iE 'iPhone' \
       | grep -iE 'connected|available' \
-      | grep -oE '[0-9A-Fa-f]{8}-[0-9A-Fa-f]{16}|[0-9a-f]{40}' \
+      | grep -oE '[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}|[0-9A-Fa-f]{8}-[0-9A-Fa-f]{16}|[0-9a-f]{40}' \
       | head -n1 || true)"
   fi
   echo "$udid"
