@@ -67,4 +67,13 @@ struct PunyoAppearance {
     // Procedural noise: roughens the normal, speckles the colour, and frays the
     // rim so grainy things don't read as a hard-edged ball.
     var grain: Double
+    // Thin-film interference. 0 = off, which is where every earlier material
+    // leaves it. Above 0 the surface picks up the wavelength-dependent banding
+    // a soap film has, ringing the rim where the light path through the film is
+    // longest.
+    var iridescence: Double = 0
+    // Film thickness in nanometres at the body's thickest point. Sets which
+    // order of interference band you land in, so this is the knob that chooses
+    // the colours rather than their strength.
+    var filmThickness: Double = 320
 }

@@ -271,6 +271,52 @@ static inline float punyoFBM(float2 p) {
     return sum;
 }
 
+// --- Thin-film interference -------------------------------------------------
+// Soap-bubble colour. Light bouncing off the front of a very thin film and
+// light that went through and bounced off the back interfere; whether a given
+// wavelength adds or cancels depends on the extra distance the second one
+// travelled, so the surface bands into rainbows that slide around as the
+// viewing angle changes.
+//
+// `cosTheta` is the cosine of the view angle at the surface -- n.z here, so 1
+// head-on and 0 at the rim. Snell carries it to the angle *inside* the film,
+// and the optical path difference 2*n*d*cos(theta_t) is evaluated at one
+// representative wavelength per channel. The half-wave phase flip on
+// reflection off the low-to-high index boundary is the +0.5.
+//
+// Returns a per-channel intensity in 0...1, not a colour to use directly:
+// callers weight it and decide whether it tints, adds, or both.
+static inline float3 punyoThinFilm(float cosTheta, float thicknessNm) {
+    const float filmIOR = 1.33;
+    float sinT2 = (1.0 - cosTheta * cosTheta) / (filmIOR * filmIOR);
+    float cosT = sqrt(max(0.0, 1.0 - sinT2));
+    float opd = 2.0 * filmIOR * max(thicknessNm, 0.0) * cosT;
+
+    // Representative wavelengths in nanometres for R / G / B.
+    const float3 lambda = float3(650.0, 550.0, 450.0);
+    float3 phase = (opd / lambda + 0.5) * (2.0 * M_PI_F);
+    return 0.5 + 0.5 * cos(phase);
+}
+
+// Film thickness at this pixel. A real soap film drains under gravity, so it
+// is thinner at the top and thicker at the bottom; without that gradient the
+// bands come out perfectly concentric and read as a dartboard rather than a
+// bubble. `span` is the body scale the offset is measured against.
+static inline float punyoFilmThicknessAt(float2 position, float2 center,
+                                         float span, float baseNm) {
+    float drain = clamp((position.y - center.y) / max(span, 0.001), -1.5, 1.5);
+    return baseNm * (1.0 + drain * 0.22);
+}
+
+// How hard the film reads at this pixel. Grazing angles see the longest path
+// through the film, so the rim is where a bubble actually shows its colours;
+// the constant term keeps the rest of the body looking coated rather than
+// bare.
+static inline float punyoFilmWeight(float nz, float iridescence) {
+    float grazing = 1.0 - max(0.0, nz);
+    return iridescence * (0.28 + 0.72 * grazing * grazing);
+}
+
 // --- Material surface -------------------------------------------------------
 // One appearance-driven surface that every phase 4 material runs through. Each
 // effect is always compiled in and weighted by a uniform, which is what keeps
@@ -278,6 +324,7 @@ static inline float punyoFBM(float2 p) {
 //
 //   optics  = (translucency, refraction, fresnel, opacity)
 //   surface = (specStrength, specPower, metallic, grain)
+//   film    = (iridescence, film thickness in nanometres)
 
 [[ stitchable ]] half4 punyo_material(
     float2 position,
@@ -295,7 +342,8 @@ static inline float punyoFBM(float2 p) {
     float3 baseColor,
     float3 innerColor,
     float4 optics,
-    float4 surface
+    float4 surface,
+    float2 film
 ) {
     float tired = clamp(1.0 - stamina, 0.0, 1.0);
     float sdScale = min(axes.x, axes.y) * punyoSquashSpread(squash);
@@ -313,6 +361,8 @@ static inline float punyoFBM(float2 p) {
     float specPower    = surface.y;
     float metallic     = surface.z;
     float grain        = surface.w;
+    float iridescence  = film.x;
+    float filmNm       = film.y;
 
     float3 n = punyoNormal(position, center, axes, deformation, squash);
     float inside = max(0.0, -sd);
@@ -377,6 +427,32 @@ static inline float punyoFBM(float2 p) {
     col += float3(1.0, 0.94, 0.97) * spec;
     col += base * fresnel * 0.55;
 
+    // Thin-film interference, last of the surface terms because it is a
+    // coating: it sits on top of whatever the body ended up being, refracted
+    // background included. Gated so the materials that leave iridescence at 0
+    // take the early-out and stay pixel-identical to before.
+    if (iridescence > 0.001) {
+        // sdScale is the body radius the rest of this function already
+        // measures against, so feeding it as the drain span puts about one
+        // gravity gradient across the body. Handing this raw pixels instead is
+        // what turns the bands into strobing noise -- thickness would then
+        // sweep hundreds of nanometres from one pixel to the next.
+        float thicknessNm = punyoFilmThicknessAt(position, center, sdScale, filmNm);
+        float3 interference = punyoThinFilm(max(0.0, n.z), thicknessNm);
+        float w = punyoFilmWeight(n.z, iridescence);
+
+        // Tint *and* add. A pure multiply reads as dirt, because the channels
+        // the film cancels simply go dark and nothing replaces them; a pure
+        // add bleaches the body toward white and loses the material
+        // underneath. Multiplying pulls the banding into the puni's own
+        // colour, and the smaller additive term is what makes the rim actually
+        // catch light. The 0.55/0.90 pair is centred on 1.0 so the tint costs
+        // no average brightness -- drop that and every iridescent material
+        // also silently gets darker.
+        col *= mix(float3(1.0), 0.55 + 0.90 * interference, w);
+        col += interference * w * 0.40;
+    }
+
     if (grain > 0.001) {
         float speck = punyoFBM((position - center) * 0.9) - 0.5;
         col *= 1.0 + speck * grain * 0.45;
@@ -406,6 +482,11 @@ static inline float punyoFBM(float2 p) {
 // Those two effects sample the layer with an offset that assumes a coherent
 // dome; on a peanut / dumbbell shape the sample lands in nonsense and reads
 // as smeared halos. Cut them here and keep the pose visually honest.
+//
+// Iridescence is kept, by that same rule rather than in spite of it: it is a
+// pure function of the surface normal and never samples the layer, so there is
+// no offset to land wrong on a two-lobe field. A held ♾️ shows the same film
+// the ellipse does.
 //
 // Takes the same geometry prefix as every other entry point, `deformation`
 // and `axes` included, even though the silhouette here comes from the lobes
@@ -440,7 +521,8 @@ static inline float punyoFBM(float2 p) {
     float3 baseColor,
     float3 innerColor,
     float4 optics,
-    float4 surface
+    float4 surface,
+    float2 film
 ) {
     // Squash fattens every lobe by the same factor the ellipse axes take, so
     // pressing a held ♾️ spreads the lobes and thickens the waist instead of
@@ -471,6 +553,8 @@ static inline float punyoFBM(float2 p) {
     float specStrength = surface.x;
     float specPower    = surface.y;
     float grain        = surface.w;
+    float iridescence  = film.x;
+    float filmNm       = film.y;
 
     float3 n = punyoMetaballNormal(position, lobes, radii, count, threshold, scale, spread);
 
@@ -505,6 +589,19 @@ static inline float punyoFBM(float2 p) {
     float3 col = base * (0.30 + 0.70 * diff) + sss;
     col += float3(1.0, 0.94, 0.97) * spec;
     col += base * fresnel * 0.55;
+
+    // Same film treatment as the ellipse shader, weights included, so holding
+    // the pose does not change what the material looks like. `scale` is the
+    // metaball's stand-in for the body radius everywhere else in this
+    // function, so it is the drain span here for the same reason sdScale is
+    // there.
+    if (iridescence > 0.001) {
+        float thicknessNm = punyoFilmThicknessAt(position, center, scale, filmNm);
+        float3 interference = punyoThinFilm(max(0.0, n.z), thicknessNm);
+        float w = punyoFilmWeight(n.z, iridescence);
+        col *= mix(float3(1.0), 0.55 + 0.90 * interference, w);
+        col += interference * w * 0.40;
+    }
 
     if (grain > 0.001) {
         float speck = punyoFBM((position - center) * 0.9) - 0.5;
@@ -545,7 +642,8 @@ static inline float punyoFBM(float2 p) {
     float3 baseColor,
     float3 innerColor,
     float4 optics,
-    float4 surface
+    float4 surface,
+    float2 film
 ) {
     float tired = clamp(1.0 - stamina, 0.0, 1.0);
     float sd = sdPunyoSilhouette(position, center, axes, deformation, squash);
@@ -557,6 +655,8 @@ static inline float punyoFBM(float2 p) {
     float bodyOpacity  = optics.w;
     float specStrength = surface.x;
     float grain        = surface.w;
+    float iridescence  = film.x;
+    float filmNm       = film.y;
 
     float3 n = punyoNormal(position, center, axes, deformation, squash);
     float sdScale = min(axes.x, axes.y) * punyoSquashSpread(squash);
@@ -593,6 +693,26 @@ static inline float punyoFBM(float2 p) {
     float3 base   = punyoFatigueTint(baseColor, tired);
     float3 shadow = punyoFatigueTint(innerColor, tired) * 0.75;
     float3 body   = mix(shadow, base, toonDiff);
+
+    // Thin-film interference, posterised. Applied here rather than at the end
+    // so the ink outline and the specular hotspot still land on top of it: the
+    // film is part of what colour the body *is*, not a wash over the finished
+    // drawing.
+    //
+    // Both the interference and its weight get quantised to four steps. The
+    // whole point of this technique is flat regions with hard boundaries, and
+    // a continuous rainbow gradient laid over that reads as a different shader
+    // bleeding through rather than as a stylised bubble. Rounding to n/3 keeps
+    // both ends of the range — floor(x*4)/4 would cap the brightest band at
+    // 0.75 and quietly dull every iridescent material in toon mode.
+    if (iridescence > 0.001) {
+        float thicknessNm = punyoFilmThicknessAt(position, center, sdScale, filmNm);
+        float3 interference = punyoThinFilm(max(0.0, n.z), thicknessNm);
+        interference = round(interference * 3.0) / 3.0;
+        float w = round(punyoFilmWeight(n.z, iridescence) * 3.0) / 3.0;
+        body *= mix(float3(1.0), 0.60 + 0.80 * interference, w);
+        body += interference * w * 0.30;
+    }
 
     // Ink outline: darken pixels within a narrow ring inside the silhouette.
     float outline = 1.0 - smoothstep(1.5, 4.0, -sd);

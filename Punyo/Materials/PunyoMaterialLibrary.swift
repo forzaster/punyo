@@ -10,6 +10,7 @@ enum PunyoMaterialLibrary {
         .sand,
         .smoke,
         .mercury,
+        .bubble,
     ]
 
     static let starting: PunyoMaterial = .slime

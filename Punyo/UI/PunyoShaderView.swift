@@ -127,8 +127,12 @@ struct PunyoShaderView<Background: View>: View {
 }
 
 private extension PunyoAppearance {
-    // Packed into two float4s so the ordering stays checkable against the Metal
-    // signature at a glance.
+    // Packed into two float4s and a trailing pair so the ordering stays
+    // checkable against the Metal signature at a glance.
+    //
+    // Order must match the tail of every usesAppearance signature exactly:
+    //   float3 baseColor, float3 innerColor, float4 optics, float4 surface,
+    //   float2 film
     var shaderArguments: [Shader.Argument] {
         [
             .float3(CGFloat(baseColor.r), CGFloat(baseColor.g), CGFloat(baseColor.b)),
@@ -137,6 +141,15 @@ private extension PunyoAppearance {
                     CGFloat(fresnel), CGFloat(opacity)),
             .float4(CGFloat(specStrength), CGFloat(specPower),
                     CGFloat(metallic), CGFloat(grain)),
+            // The film pair is deliberately not padded out to a float4: two
+            // dead lanes are an invitation for the next effect to squat in
+            // them, and appending a fresh argument is cheaper to review than
+            // decoding what .z of a half-used vector means today. Every
+            // usesAppearance entry point has to declare this trailing float2 —
+            // one that doesn't will silently reinterpret nothing, because it
+            // is last, but the block would drift the moment anything is added
+            // after it.
+            .float2(CGFloat(iridescence), CGFloat(filmThickness)),
         ]
     }
 }
