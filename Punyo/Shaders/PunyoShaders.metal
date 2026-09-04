@@ -591,12 +591,20 @@ static inline float punyoFilmWeight(float nz, float iridescence) {
     col += base * fresnel * 0.55;
 
     // Same film treatment as the ellipse shader, weights included, so holding
-    // the pose does not change what the material looks like. `scale` is the
-    // metaball's stand-in for the body radius everywhere else in this
-    // function, so it is the drain span here for the same reason sdScale is
-    // there.
+    // the pose does not change what the material looks like.
+    //
+    // The drain span is deliberately the ellipse's `min(axes) * spread` and not
+    // this function's `scale`. `scale` is the largest lobe radius, which is a
+    // different magnitude from the body's minor axis, and the drain gradient is
+    // measured against the span -- feeding `scale` here would respace the bands
+    // the instant the pose engaged and respace them again on collapse, which is
+    // the one thing this block is trying not to do. Everything else in this
+    // function measures against `scale` because it is working with the lobe
+    // field; the film is the exception because it has to match the *other*
+    // shader, not this one.
     if (iridescence > 0.001) {
-        float thicknessNm = punyoFilmThicknessAt(position, center, scale, filmNm);
+        float filmSpan = min(axes.x, axes.y) * spread;
+        float thicknessNm = punyoFilmThicknessAt(position, center, filmSpan, filmNm);
         float3 interference = punyoThinFilm(max(0.0, n.z), thicknessNm);
         float w = punyoFilmWeight(n.z, iridescence);
         col *= mix(float3(1.0), 0.55 + 0.90 * interference, w);
