@@ -409,8 +409,14 @@ static inline float punyoFilmWeight(float nz, float iridescence) {
         float2 off = -n.xy * (maxRefract * refraction * thickness);
         float2 sp = clamp(position + off, float2(0.0), boundingRect.zw);
         float3 seen = float3(layer.sample(sp).rgb) * float3(1.02, 0.96, 1.0);
-        // Rim stays surface, core lets things through.
-        float pass = mix(0.60, 0.05, fresnel) * refraction;
+        // Rim stays surface, core lets things through. `fresnel` is the raw
+        // rim term and is deliberately unbounded -- a material wanting a hot
+        // outline sets fresnelAmt above 1, and シャボン玉 is the first one that
+        // does -- but as a *lerp position* it has to stay in 0...1. Uncapped,
+        // anything past 1 sends `pass` negative and turns this blend into a
+        // background subtraction on the rim band, which reads as black
+        // speckle over a light wallpaper.
+        float pass = mix(0.60, 0.05, saturate(fresnel)) * refraction;
         col = mix(col, seen, pass);
     }
 
